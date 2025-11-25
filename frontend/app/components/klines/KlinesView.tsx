@@ -308,6 +308,14 @@ export default function KlinesView({ onAccountUpdated }: KlinesViewProps) {
                 </Select>
               </div>
 
+              {/* K-line environment warning - always visible */}
+              <div className="pt-2 border-t">
+                <p className="text-xs text-amber-600 font-medium flex items-center gap-1">
+                  <span>⚠️</span>
+                  <span>K-line analysis is only available for Mainnet environment</span>
+                </p>
+              </div>
+
               {selectedSymbol && renderBackfillButton()}
             </CardContent>
           </Card>
