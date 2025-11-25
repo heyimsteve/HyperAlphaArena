@@ -435,12 +435,9 @@ class HyperliquidTradingClient:
                         from datetime import datetime, timezone
                         import time as time_module
 
-                        # Convert to local server time (auto-detect timezone)
-                        # Use system's local timezone instead of hardcoding
+                        # Use UTC time (consistent with session context display)
                         utc_dt = datetime.fromtimestamp(opened_at / 1000, tz=timezone.utc)
-                        local_tz = datetime.now().astimezone().tzinfo
-                        local_dt = utc_dt.astimezone(local_tz)
-                        opened_at_str = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+                        opened_at_str = utc_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
 
                         # Calculate holding duration
                         current_time_ms = int(time_module.time() * 1000)
@@ -743,11 +740,9 @@ class HyperliquidTradingClient:
                 from datetime import datetime, timezone
 
                 close_time_ms = fill.get('time', 0)
-                # Convert to local server time (auto-detect timezone)
+                # Use UTC time (consistent with session context display)
                 utc_dt = datetime.fromtimestamp(close_time_ms / 1000, tz=timezone.utc)
-                local_tz = datetime.now().astimezone().tzinfo
-                local_dt = utc_dt.astimezone(local_tz)
-                close_time = local_dt.strftime('%Y-%m-%d %H:%M:%S')
+                close_time = utc_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
 
                 trade = {
                     'symbol': fill.get('coin'),
