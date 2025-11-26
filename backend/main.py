@@ -231,10 +231,14 @@ def on_startup():
                     UPDATE crypto_klines SET environment = 'mainnet' WHERE environment IS NULL
                 """))
 
-                # Drop old unique constraint if exists
+                # Drop old unique constraints if exist
                 db.execute(text("""
                     ALTER TABLE crypto_klines
                     DROP CONSTRAINT IF EXISTS crypto_klines_exchange_symbol_market_period_timestamp_key
+                """))
+                db.execute(text("""
+                    ALTER TABLE crypto_klines
+                    DROP CONSTRAINT IF EXISTS uq_crypto_klines_unique
                 """))
 
                 # Create new unique constraint including environment
