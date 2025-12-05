@@ -241,14 +241,21 @@ class HyperliquidTradingClient:
         except Exception:
             return str(payload)
 
-    def _get_builder_params(self) -> Dict[str, Any]:
+    def _get_builder_params(self) -> Optional[Dict[str, Any]]:
         """
-        Get builder fee parameters for orders
+        Get builder fee parameters for orders.
+
+        Only returns builder params for mainnet environment to avoid
+        unnecessary fees on testnet trading.
 
         Returns:
-            Dict with builder address and fee rate
-            Format: {"b": "0x...", "f": 30}
+            Dict with builder address and fee rate for mainnet, None for testnet
+            Format: {"b": "0x...", "f": 30} or None
         """
+        # Only apply builder fee on mainnet, not on testnet
+        if self.environment != "mainnet":
+            return None
+
         from config.settings import HYPERLIQUID_BUILDER_CONFIG
 
         return {
@@ -1768,15 +1775,22 @@ class HyperliquidTradingClient:
                             "tpsl": "tp"
                         }}
 
-                        tp_result = self.sdk_exchange.order(
-                            name=symbol,
-                            is_buy=not is_long,  # Opposite direction to close
-                            sz=position_size,
-                            limit_px=rounded_tp,
-                            order_type=tp_order_type,
-                            reduce_only=True,
-                            builder=self._get_builder_params()
-                        )
+                        # Prepare order parameters
+                        tp_order_params = {
+                            "name": symbol,
+                            "is_buy": not is_long,
+                            "sz": position_size,
+                            "limit_px": rounded_tp,
+                            "order_type": tp_order_type,
+                            "reduce_only": True
+                        }
+
+                        # Add builder params only for mainnet
+                        builder_params = self._get_builder_params()
+                        if builder_params:
+                            tp_order_params["builder"] = builder_params
+
+                        tp_result = self.sdk_exchange.order(**tp_order_params)
 
                         if tp_result.get("status") == "ok":
                             result['tp_updated'] = True
@@ -1854,15 +1868,22 @@ class HyperliquidTradingClient:
                             "tpsl": "sl"
                         }}
 
-                        sl_result = self.sdk_exchange.order(
-                            name=symbol,
-                            is_buy=not is_long,  # Opposite direction to close
-                            sz=position_size,
-                            limit_px=rounded_sl,
-                            order_type=sl_order_type,
-                            reduce_only=True,
-                            builder=self._get_builder_params()
-                        )
+                        # Prepare order parameters
+                        sl_order_params = {
+                            "name": symbol,
+                            "is_buy": not is_long,
+                            "sz": position_size,
+                            "limit_px": rounded_sl,
+                            "order_type": sl_order_type,
+                            "reduce_only": True
+                        }
+
+                        # Add builder params only for mainnet
+                        builder_params = self._get_builder_params()
+                        if builder_params:
+                            sl_order_params["builder"] = builder_params
+
+                        sl_result = self.sdk_exchange.order(**sl_order_params)
 
                         if sl_result.get("status") == "ok":
                             result['sl_updated'] = True
@@ -2532,15 +2553,22 @@ class HyperliquidTradingClient:
             # Place main order using SDK
             logger.info(f"[SDK] Placing main order: {symbol} {'BUY' if is_buy else 'SELL'} {size}@{price} TIF={time_in_force}")
 
-            main_result = self.sdk_exchange.order(
-                name=symbol,
-                is_buy=is_buy,
-                sz=size,
-                limit_px=price,
-                order_type=order_type,
-                reduce_only=reduce_only,
-                builder=self._get_builder_params()
-            )
+            # Prepare order parameters
+            main_order_params = {
+                "name": symbol,
+                "is_buy": is_buy,
+                "sz": size,
+                "limit_px": price,
+                "order_type": order_type,
+                "reduce_only": reduce_only
+            }
+
+            # Add builder params only for mainnet
+            builder_params = self._get_builder_params()
+            if builder_params:
+                main_order_params["builder"] = builder_params
+
+            main_result = self.sdk_exchange.order(**main_order_params)
 
             logger.info(f"[SDK] Main order result: {main_result}")
 
@@ -2597,15 +2625,22 @@ class HyperliquidTradingClient:
                             "tpsl": "tp"
                         }}
 
-                        tp_result = self.sdk_exchange.order(
-                            name=symbol,
-                            is_buy=not is_buy,  # Opposite direction
-                            sz=size,
-                            limit_px=take_profit_price,
-                            order_type=tp_order_type,
-                            reduce_only=True,
-                            builder=self._get_builder_params()
-                        )
+                        # Prepare order parameters
+                        tp_order_params = {
+                            "name": symbol,
+                            "is_buy": not is_buy,
+                            "sz": size,
+                            "limit_px": take_profit_price,
+                            "order_type": tp_order_type,
+                            "reduce_only": True
+                        }
+
+                        # Add builder params only for mainnet
+                        builder_params = self._get_builder_params()
+                        if builder_params:
+                            tp_order_params["builder"] = builder_params
+
+                        tp_result = self.sdk_exchange.order(**tp_order_params)
 
                         logger.info(f"[SDK] TP order result: {tp_result}")
 
@@ -2631,15 +2666,22 @@ class HyperliquidTradingClient:
                             "tpsl": "sl"
                         }}
 
-                        sl_result = self.sdk_exchange.order(
-                            name=symbol,
-                            is_buy=not is_buy,  # Opposite direction
-                            sz=size,
-                            limit_px=stop_loss_price,
-                            order_type=sl_order_type,
-                            reduce_only=True,
-                            builder=self._get_builder_params()
-                        )
+                        # Prepare SL order parameters
+                        sl_order_params = {
+                            "name": symbol,
+                            "is_buy": not is_buy,  # Opposite direction
+                            "sz": size,
+                            "limit_px": stop_loss_price,
+                            "order_type": sl_order_type,
+                            "reduce_only": True
+                        }
+
+                        # Add builder params only for mainnet
+                        builder_params = self._get_builder_params()
+                        if builder_params:
+                            sl_order_params["builder"] = builder_params
+
+                        sl_result = self.sdk_exchange.order(**sl_order_params)
 
                         logger.info(f"[SDK] SL order result: {sl_result}")
 

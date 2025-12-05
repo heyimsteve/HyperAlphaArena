@@ -1163,3 +1163,177 @@ async def approve_builder_fee(
             status_code=500,
             detail=f"Failed to approve builder fee: {str(e)}"
         )
+
+
+@router.get("/hyperliquid/check-mainnet-accounts")
+async def check_mainnet_accounts(
+    db: Session = Depends(get_db)
+):
+    """
+    Check builder fee authorization for all active mainnet trading accounts.
+
+    This endpoint is called on system startup to identify accounts that have:
+    - auto_trading_enabled = true
+    - hyperliquid_mainnet_private_key configured
+    - but builder fee NOT authorized
+
+    Returns:
+        {
+            "unauthorized_accounts": [
+                {
+                    "account_id": int,
+                    "account_name": str,
+                    "wallet_address": str,
+                    "max_fee": int,  # Current authorized fee in tenths of basis point
+                    "required_fee": int  # Required fee (30 for 0.03%)
+                }
+            ]
+        }
+    """
+    try:
+        import requests
+        from config.settings import HYPERLIQUID_BUILDER_CONFIG
+        from eth_account import Account as EthAccount
+
+        # Query all accounts with mainnet configured and trading enabled
+        accounts = db.query(Account).filter(
+            Account.auto_trading_enabled == "true",
+            Account.hyperliquid_mainnet_private_key.isnot(None),
+            Account.hyperliquid_mainnet_private_key != ""
+        ).all()
+
+        logger.info(f"Found {len(accounts)} active mainnet trading accounts to check")
+
+        unauthorized_accounts = []
+
+        for account in accounts:
+            try:
+                # Decrypt and derive wallet address from mainnet private key
+                from services.hyperliquid_environment import decrypt_private_key
+
+                decrypted_key = decrypt_private_key(account.hyperliquid_mainnet_private_key)
+                if not decrypted_key:
+                    logger.warning(f"Failed to decrypt mainnet key for account {account.id}")
+                    continue
+
+                # Ensure 0x prefix
+                if not decrypted_key.startswith('0x'):
+                    decrypted_key = '0x' + decrypted_key
+
+                # Derive wallet address
+                eth_account = EthAccount.from_key(decrypted_key)
+                wallet_address = eth_account.address.lower()
+
+                # Check builder fee authorization
+                response = requests.post(
+                    "https://api.hyperliquid.xyz/info",
+                    json={
+                        "type": "maxBuilderFee",
+                        "user": wallet_address,
+                        "builder": HYPERLIQUID_BUILDER_CONFIG.builder_address
+                    },
+                    timeout=10
+                )
+
+                if response.status_code == 200:
+                    max_fee = response.json()
+                    required_fee = HYPERLIQUID_BUILDER_CONFIG.builder_fee
+
+                    # If not authorized or insufficient fee
+                    if max_fee < required_fee:
+                        unauthorized_accounts.append({
+                            "account_id": account.id,
+                            "account_name": account.name,
+                            "wallet_address": wallet_address,
+                            "max_fee": max_fee,
+                            "required_fee": required_fee
+                        })
+                        logger.info(
+                            f"Account {account.id} ({account.name}) unauthorized: "
+                            f"max_fee={max_fee}, required={required_fee}"
+                        )
+                else:
+                    logger.error(
+                        f"Failed to check authorization for account {account.id}: "
+                        f"HTTP {response.status_code}"
+                    )
+            except Exception as account_err:
+                logger.error(
+                    f"Error checking account {account.id}: {account_err}",
+                    exc_info=True
+                )
+                continue
+
+        logger.info(
+            f"Builder fee check complete: {len(unauthorized_accounts)} "
+            f"unauthorized out of {len(accounts)} total"
+        )
+
+        return {
+            "unauthorized_accounts": unauthorized_accounts
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to check mainnet accounts: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check mainnet accounts: {str(e)}"
+        )
+
+
+@router.post("/{account_id}/disable-trading")
+async def disable_trading(
+    account_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Disable auto trading for an account.
+
+    This endpoint is called when a user refuses to authorize builder fee,
+    ensuring that the account cannot place orders without proper authorization.
+
+    Args:
+        account_id: The account ID to disable trading for
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "account_id": int,
+            "account_name": str
+        }
+    """
+    try:
+        # Get account
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Account {account_id} not found"
+            )
+
+        # Disable auto trading
+        account.auto_trading_enabled = "false"
+        db.commit()
+
+        logger.info(
+            f"Auto trading disabled for account {account_id} ({account.name}) "
+            f"due to builder fee authorization refusal"
+        )
+
+        return {
+            "success": True,
+            "message": f"Auto trading disabled for {account.name}",
+            "account_id": account_id,
+            "account_name": account.name
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to disable trading for account {account_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to disable trading: {str(e)}"
+        )
