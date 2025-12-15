@@ -107,12 +107,48 @@ def run_migration(migration_file: str):
         # DO NOT mark failed migrations as executed - they need to be retried
         return False
 
+def ensure_critical_columns():
+    """
+    Directly check and add missing critical columns.
+    This runs before migration checks to fix any database schema issues.
+    """
+    db = SessionLocal()
+    try:
+        # Check if signal_pools table exists first
+        result = db.execute(text("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'signal_pools'
+        """))
+        if not result.fetchone():
+            return  # Table doesn't exist yet, migrations will create it
+
+        # Check if logic column exists
+        result = db.execute(text("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'signal_pools' AND column_name = 'logic'
+        """))
+        if not result.fetchone():
+            # Directly add the missing column
+            db.execute(text("""
+                ALTER TABLE signal_pools
+                ADD COLUMN logic VARCHAR(10) DEFAULT 'AND'
+            """))
+            db.commit()
+            logger.info("Auto-fix: Added missing 'logic' column to signal_pools")
+    except Exception as e:
+        logger.debug(f"Schema check skipped: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def run_pending_migrations():
     """Run all pending migrations"""
     logger.info("Checking for pending migrations...")
 
     try:
         check_migration_table()
+        ensure_critical_columns()
 
         executed_count = 0
         failed_count = 0
