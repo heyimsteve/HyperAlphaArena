@@ -272,6 +272,7 @@ export default function SignalManager() {
   const [previewSymbol, setPreviewSymbol] = useState('BTC')
   const [previewData, setPreviewData] = useState<any>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [chartTimeframe, setChartTimeframe] = useState('5m') // Independent chart timeframe
 
   // Save/delete loading states (for dialog buttons)
   const [savingSignal, setSavingSignal] = useState(false)
@@ -493,6 +494,9 @@ export default function SignalManager() {
   }
 
   const openPreviewDialog = async (signal: SignalDefinition, symbol: string = 'BTC') => {
+    // Get time_window from signal's trigger condition and set as default chart timeframe
+    const signalTimeWindow = signal.trigger_condition?.time_window || '5m'
+    setChartTimeframe(signalTimeWindow)
     setPreviewSignal(signal)
     setPreviewPool(null)
     setPreviewSymbol(symbol)
@@ -501,13 +505,10 @@ export default function SignalManager() {
     setPreviewData(null)
 
     try {
-      // Get time_window from signal's trigger condition
-      const timeWindow = signal.trigger_condition?.time_window || '5m'
-
       // Step 1: Fetch K-lines from market API (ensures fresh data)
       // Use 500 klines to match the K-line page and provide more historical context
       const klineRes = await fetch(
-        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${timeWindow}&count=500`
+        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${signalTimeWindow}&count=500`
       )
       if (!klineRes.ok) throw new Error('Failed to fetch K-line data')
       const klineData = await klineRes.json()
@@ -551,6 +552,11 @@ export default function SignalManager() {
   }
 
   const openPoolPreviewDialog = async (pool: SignalPool, symbol: string = 'BTC') => {
+    // Use first signal's time_window or default to 5m, set as default chart timeframe
+    const firstSignalId = pool.signal_ids[0]
+    const firstSignal = signals.find(s => s.id === firstSignalId)
+    const poolTimeWindow = firstSignal?.trigger_condition?.time_window || '5m'
+    setChartTimeframe(poolTimeWindow)
     setPreviewPool(pool)
     setPreviewSignal(null)
     setPreviewSymbol(symbol)
@@ -559,14 +565,9 @@ export default function SignalManager() {
     setPreviewData(null)
 
     try {
-      // Use first signal's time_window or default to 5m
-      const firstSignalId = pool.signal_ids[0]
-      const firstSignal = signals.find(s => s.id === firstSignalId)
-      const timeWindow = firstSignal?.trigger_condition?.time_window || '5m'
-
       // Step 1: Fetch K-lines
       const klineRes = await fetch(
-        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${timeWindow}&count=500`
+        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${poolTimeWindow}&count=500`
       )
       if (!klineRes.ok) throw new Error('Failed to fetch K-line data')
       const klineData = await klineRes.json()
@@ -665,6 +666,8 @@ export default function SignalManager() {
     }
 
     const symbol = config.symbol || 'BTC'
+    const tempTimeWindow = config.trigger_condition?.time_window || '5m'
+    setChartTimeframe(tempTimeWindow)
     setPreviewSignal(tempSignal)
     setPreviewSymbol(symbol)
     setPreviewDialogOpen(true)
@@ -672,11 +675,9 @@ export default function SignalManager() {
     setPreviewData(null)
 
     try {
-      const timeWindow = config.trigger_condition?.time_window || '5m'
-
       // Fetch K-lines
       const klineRes = await fetch(
-        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${timeWindow}&count=500`
+        `/api/market/kline-with-indicators/${symbol}?market=hyperliquid&period=${tempTimeWindow}&count=500`
       )
       if (!klineRes.ok) throw new Error('Failed to fetch K-line data')
       const klineData = await klineRes.json()
@@ -718,6 +719,82 @@ export default function SignalManager() {
       })
     } catch (err) {
       toast.error('Failed to load preview data')
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  // Refresh preview with new chart timeframe (keeps same signal/pool, just changes K-line period)
+  const refreshPreviewWithTimeframe = async (newTimeframe: string) => {
+    setChartTimeframe(newTimeframe)
+    setPreviewLoading(true)
+
+    try {
+      // Fetch K-lines with new timeframe
+      const klineRes = await fetch(
+        `/api/market/kline-with-indicators/${previewSymbol}?market=hyperliquid&period=${newTimeframe}&count=500`
+      )
+      if (!klineRes.ok) throw new Error('Failed to fetch K-line data')
+      const klineData = await klineRes.json()
+
+      if (!klineData.klines || klineData.klines.length === 0) {
+        throw new Error('No K-line data available')
+      }
+
+      const klines = klineData.klines
+      const klineMinTs = Math.min(...klines.map((k: any) => k.timestamp)) * 1000
+      const klineMaxTs = Math.max(...klines.map((k: any) => k.timestamp)) * 1000
+
+      // Fetch triggers based on whether it's a pool or signal preview
+      let triggerData
+      if (previewPool) {
+        const triggerRes = await fetch(
+          `/api/signals/pool-backtest/${previewPool.id}?symbol=${previewSymbol}&kline_min_ts=${klineMinTs}&kline_max_ts=${klineMaxTs}`
+        )
+        if (!triggerRes.ok) throw new Error('Failed to fetch pool backtest')
+        triggerData = await triggerRes.json()
+      } else if (previewSignal) {
+        if (previewSignal.id === 0) {
+          // Temp signal (AI preview)
+          const triggerRes = await fetch('/api/signals/backtest-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              symbol: previewSymbol,
+              triggerCondition: previewSignal.trigger_condition,
+              klineMinTs,
+              klineMaxTs,
+            }),
+          })
+          if (!triggerRes.ok) throw new Error('Failed to fetch trigger data')
+          triggerData = await triggerRes.json()
+        } else {
+          // Saved signal
+          const triggerRes = await fetch(
+            `/api/signals/backtest/${previewSignal.id}?symbol=${previewSymbol}&kline_min_ts=${klineMinTs}&kline_max_ts=${klineMaxTs}`
+          )
+          if (!triggerRes.ok) throw new Error('Failed to fetch trigger data')
+          triggerData = await triggerRes.json()
+        }
+      }
+
+      const formattedKlines = klines.map((k: any) => ({
+        timestamp: k.timestamp * 1000,
+        open: k.open,
+        high: k.high,
+        low: k.low,
+        close: k.close,
+      }))
+
+      setPreviewData({
+        ...triggerData,
+        klines: formattedKlines,
+        kline_count: formattedKlines.length,
+        isPoolPreview: !!previewPool,
+        chart_timeframe: newTimeframe,
+      })
+    } catch (err) {
+      toast.error('Failed to refresh preview')
     } finally {
       setPreviewLoading(false)
     }
@@ -1357,7 +1434,7 @@ export default function SignalManager() {
 
       {/* Signal/Pool Preview Dialog */}
       <Dialog open={previewDialogOpen} onOpenChange={setPreviewDialogOpen}>
-        <DialogContent className="w-[1200px] max-w-[95vw] h-[800px] max-h-[95vh] overflow-y-auto">
+        <DialogContent className="w-[1200px] max-w-[95vw] h-[860px] max-h-[95vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {previewPool ? `Pool Preview: ${previewPool.pool_name}` : `Signal Preview: ${previewSignal?.signal_name}`}
@@ -1435,8 +1512,30 @@ export default function SignalManager() {
                 <SignalPreviewChart
                   klines={previewData.klines}
                   triggers={previewData.triggers || []}
-                  timeWindow={previewData.time_window || '5m'}
+                  timeWindow={chartTimeframe}
                 />
+              </div>
+
+              {/* Chart Timeframe Selector */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-muted-foreground">Chart timeframe:</span>
+                {['1m', '3m', '5m', '15m', '30m', '1h', '4h'].map(tf => (
+                  <Button
+                    key={tf}
+                    variant={chartTimeframe === tf ? 'default' : 'outline'}
+                    size="sm"
+                    disabled={previewLoading}
+                    onClick={() => refreshPreviewWithTimeframe(tf)}
+                  >
+                    {tf}
+                  </Button>
+                ))}
+                <span className="text-xs text-muted-foreground ml-2">
+                  (Signal: {previewData.time_window || '5m'})
+                </span>
+                <span className="text-xs text-yellow-500 ml-2">
+                  Note: Larger timeframes require longer calculation time
+                </span>
               </div>
 
               {/* Symbol Selector */}
