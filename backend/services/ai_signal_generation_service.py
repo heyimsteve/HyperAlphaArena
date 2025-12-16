@@ -748,6 +748,85 @@ def _tool_get_indicators_batch(
     return results
 
 
+def _combine_signals_with_pool_edge_detection(
+    db: Session, symbol: str, signals: List[Dict]
+) -> set:
+    """
+    Combine signals using pool-level edge detection (same as real-time detection).
+    Evaluates all signals at each check point and triggers only on False->True transition.
+    """
+    from services.market_flow_indicators import floor_timestamp
+
+    if not signals:
+        return set()
+
+    # Get time window from first signal
+    time_window = signals[0].get("time_window", "5m")
+    timeframe_ms = {
+        "1m": 60000, "3m": 180000, "5m": 300000,
+        "15m": 900000, "30m": 1800000, "1h": 3600000
+    }
+    interval_ms = timeframe_ms.get(time_window, 300000)
+
+    # Load raw data for all metrics
+    metrics_data = {}
+    metric_map = {"oi_delta_percent": "oi_delta", "taker_buy_ratio": "taker_ratio"}
+
+    for sig in signals:
+        metric = sig.get("indicator")
+        if metric and metric not in metrics_data:
+            metric = metric_map.get(metric, metric)
+            raw_data = signal_backtest_service._load_raw_data_for_metric(
+                db, symbol, metric, None, None, interval_ms
+            )
+            metrics_data[metric] = raw_data
+
+    # Generate check points from all data timestamps
+    all_timestamps = set()
+    for data in metrics_data.values():
+        if data:
+            all_timestamps.update(r[0] for r in data)
+
+    check_points = sorted(all_timestamps)
+    if not check_points:
+        return set()
+
+    # Evaluate all signals at each check point with pool-level edge detection
+    triggers = set()
+    was_active = False
+
+    for check_time in check_points:
+        all_met = True
+
+        for sig in signals:
+            metric = sig.get("indicator")
+            operator = sig.get("operator")
+            threshold = sig.get("threshold")
+
+            metric = metric_map.get(metric, metric)
+            raw_data = metrics_data.get(metric, [])
+
+            value = signal_backtest_service._calculate_indicator_at_time(
+                raw_data, metric, check_time, interval_ms
+            )
+
+            if value is None:
+                all_met = False
+                break
+
+            if not signal_backtest_service._evaluate_condition(value, operator, threshold):
+                all_met = False
+                break
+
+        # Pool-level edge detection: only trigger on False -> True
+        if all_met and not was_active:
+            triggers.add(check_time)
+
+        was_active = all_met
+
+    return triggers
+
+
 def _tool_predict_signal_combination(
     db: Session, symbol: str, signals: List[Dict], logic: str
 ) -> Dict[str, Any]:
@@ -757,7 +836,7 @@ def _tool_predict_signal_combination(
     if not signals:
         return {"error": "No signals provided"}
 
-    # Get triggers for each signal
+    # Get triggers for each signal (for individual stats and OR logic)
     signal_triggers = {}
     individual_counts = {}
     individual_samples = {}
@@ -785,18 +864,15 @@ def _tool_predict_signal_combination(
         trigger_timestamps = [t["timestamp"] for t in triggers]
         signal_triggers[i] = set(trigger_timestamps)
         individual_counts[i] = len(triggers)
-        # Store sample timestamps for each signal (max 5)
         individual_samples[i] = sorted(trigger_timestamps)[:5]
 
     # Combine based on logic
     if logic == "AND":
-        # All signals must trigger at same timestamp
-        if signal_triggers:
-            combined_ts = set.intersection(*signal_triggers.values())
-        else:
-            combined_ts = set()
+        # Use pool-level edge detection (same as real-time detection)
+        combined_ts = _combine_signals_with_pool_edge_detection(
+            db, symbol.upper(), signals
+        )
     else:  # OR
-        # Any signal triggers
         combined_ts = set.union(*signal_triggers.values()) if signal_triggers else set()
 
     combined_count = len(combined_ts)
