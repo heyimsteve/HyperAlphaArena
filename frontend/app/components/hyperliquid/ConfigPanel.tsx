@@ -18,6 +18,42 @@ interface ConfigPanelProps {
   onConfigUpdated?: () => void;
 }
 
+// Detect if input looks like a wallet address instead of private key
+type InputType = 'empty' | 'valid_key' | 'key_no_prefix' | 'wallet_address' | 'invalid';
+
+function detectInputType(input: string): InputType {
+  const trimmed = input.trim();
+  if (!trimmed) return 'empty';
+
+  // Remove 0x prefix for length check
+  const withoutPrefix = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+
+  // Check if it's valid hex
+  if (!/^[0-9a-fA-F]+$/.test(withoutPrefix)) return 'invalid';
+
+  // Private key: 64 hex chars (without 0x) or 66 chars (with 0x)
+  if (withoutPrefix.length === 64) {
+    return trimmed.startsWith('0x') ? 'valid_key' : 'key_no_prefix';
+  }
+
+  // Wallet address: 40 hex chars (without 0x) or 42 chars (with 0x)
+  if (withoutPrefix.length === 40) return 'wallet_address';
+
+  return 'invalid';
+}
+
+// Auto-format private key (add 0x prefix if missing)
+function formatPrivateKey(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+
+  const withoutPrefix = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+  if (withoutPrefix.length === 64 && /^[0-9a-fA-F]+$/.test(withoutPrefix)) {
+    return '0x' + withoutPrefix;
+  }
+  return trimmed;
+}
+
 export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelProps) {
   const [enabled, setEnabled] = useState(false);
   const [environment, setEnvironment] = useState<HyperliquidEnvironment>('testnet');
@@ -28,6 +64,7 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'disconnected'>('idle');
+  const [inputWarning, setInputWarning] = useState<string | null>(null);
 
   useEffect(() => {
     loadConfig();
@@ -57,8 +94,21 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
       return;
     }
 
-    if (privateKey && !validatePrivateKey(privateKey)) {
-      toast.error('Invalid private key format');
+    // Auto-format private key before validation
+    const formattedKey = formatPrivateKey(privateKey);
+    if (formattedKey !== privateKey) {
+      setPrivateKey(formattedKey);
+    }
+
+    // Check for common mistakes
+    const inputType = detectInputType(formattedKey);
+    if (inputType === 'wallet_address') {
+      toast.error('You entered a wallet address, not a private key. Please export your private key from your wallet.');
+      return;
+    }
+
+    if (formattedKey && !validatePrivateKey(formattedKey)) {
+      toast.error('Invalid private key format. Must be 64 hex characters.');
       return;
     }
 
@@ -68,7 +118,7 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
     }
 
     // If no private key provided but already enabled, we need to require it for security
-    if (!privateKey && enabled) {
+    if (!formattedKey && enabled) {
       toast.error('Please re-enter private key to update settings');
       return;
     }
@@ -77,7 +127,7 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
     try {
       const request: SetupRequest = {
         environment,
-        privateKey,
+        privateKey: formattedKey,
         maxLeverage,
         defaultLeverage,
       };
@@ -192,9 +242,33 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
             id="private-key"
             type={showPrivateKey ? 'text' : 'password'}
             value={privateKey}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            placeholder="0x..."
-            className="pr-10 font-mono text-sm"
+            onChange={(e) => {
+              const value = e.target.value;
+              setPrivateKey(value);
+              // Check input type and show appropriate warning
+              const inputType = detectInputType(value);
+              if (inputType === 'wallet_address') {
+                setInputWarning('This looks like a wallet ADDRESS, not a private key. Private keys are 64 hex characters. Check your wallet export settings.');
+              } else if (inputType === 'key_no_prefix') {
+                setInputWarning(null); // Will auto-add 0x on blur
+              } else if (inputType === 'invalid' && value.trim()) {
+                setInputWarning('Invalid format. Private key must be 64 hexadecimal characters.');
+              } else {
+                setInputWarning(null);
+              }
+            }}
+            onBlur={(e) => {
+              // Auto-format on blur (add 0x prefix if needed)
+              const formatted = formatPrivateKey(e.target.value);
+              if (formatted !== privateKey) {
+                setPrivateKey(formatted);
+                if (detectInputType(formatted) === 'valid_key') {
+                  toast.success('Added 0x prefix automatically');
+                }
+              }
+            }}
+            placeholder="0x... or paste without 0x prefix"
+            className={`pr-10 font-mono text-sm ${inputWarning ? 'border-red-500 focus:ring-red-500' : ''}`}
           />
           <button
             type="button"
@@ -204,9 +278,19 @@ export default function ConfigPanel({ accountId, onConfigUpdated }: ConfigPanelP
             {showPrivateKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
         </div>
-        <p className="text-xs text-gray-500">
-          Keys are encrypted before storage. Must be 0x followed by 64 hex characters.
-        </p>
+        {inputWarning && (
+          <div className="flex items-start gap-2 p-2 bg-red-50 dark:bg-red-900/20 rounded text-red-600 dark:text-red-400 text-xs">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>{inputWarning}</span>
+          </div>
+        )}
+        <div className="text-xs text-gray-500 space-y-1">
+          <p>Private key: 64 hex characters (0x prefix will be added automatically if missing)</p>
+          <p className="text-amber-600 dark:text-amber-400">
+            DEX trading requires your private key to sign transactions on-chain. This is different from CEX API keys.
+          </p>
+          <p>Your key is stored locally in your browser and encrypted. We recommend using a dedicated trading wallet.</p>
+        </div>
       </div>
 
       {/* Leverage Settings */}

@@ -38,6 +38,32 @@ interface WalletData {
   }
 }
 
+// Detect if input looks like a wallet address instead of private key
+type InputType = 'empty' | 'valid_key' | 'key_no_prefix' | 'wallet_address' | 'invalid'
+
+function detectInputType(input: string): InputType {
+  const trimmed = input.trim()
+  if (!trimmed) return 'empty'
+  const withoutPrefix = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed
+  if (!/^[0-9a-fA-F]+$/.test(withoutPrefix)) return 'invalid'
+  if (withoutPrefix.length === 64) {
+    return trimmed.startsWith('0x') ? 'valid_key' : 'key_no_prefix'
+  }
+  if (withoutPrefix.length === 40) return 'wallet_address'
+  return 'invalid'
+}
+
+// Auto-format private key (add 0x prefix if missing)
+function formatPrivateKey(input: string): string {
+  const trimmed = input.trim()
+  if (!trimmed) return ''
+  const withoutPrefix = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed
+  if (withoutPrefix.length === 64 && /^[0-9a-fA-F]+$/.test(withoutPrefix)) {
+    return '0x' + withoutPrefix
+  }
+  return trimmed
+}
+
 export default function WalletConfigPanel({
   accountId,
   accountName,
@@ -59,11 +85,13 @@ export default function WalletConfigPanel({
   const [testnetPrivateKey, setTestnetPrivateKey] = useState('')
   const [testnetMaxLeverage, setTestnetMaxLeverage] = useState(3)
   const [testnetDefaultLeverage, setTestnetDefaultLeverage] = useState(1)
+  const [testnetInputWarning, setTestnetInputWarning] = useState<string | null>(null)
 
   // Form states for mainnet
   const [mainnetPrivateKey, setMainnetPrivateKey] = useState('')
   const [mainnetMaxLeverage, setMainnetMaxLeverage] = useState(3)
   const [mainnetDefaultLeverage, setMainnetDefaultLeverage] = useState(1)
+  const [mainnetInputWarning, setMainnetInputWarning] = useState<string | null>(null)
 
   // Authorization modal states
   const [unauthorizedAccounts, setUnauthorizedAccounts] = useState<UnauthorizedAccount[]>([])
@@ -102,18 +130,36 @@ export default function WalletConfigPanel({
   }
 
   const handleSaveWallet = async (environment: 'testnet' | 'mainnet') => {
-    const privateKey = environment === 'testnet' ? testnetPrivateKey : mainnetPrivateKey
+    const rawPrivateKey = environment === 'testnet' ? testnetPrivateKey : mainnetPrivateKey
     const maxLeverage = environment === 'testnet' ? testnetMaxLeverage : mainnetMaxLeverage
     const defaultLeverage = environment === 'testnet' ? testnetDefaultLeverage : mainnetDefaultLeverage
 
-    if (!privateKey.trim()) {
+    if (!rawPrivateKey.trim()) {
       toast.error('Please enter a private key')
       return
     }
 
+    // Auto-format private key (add 0x prefix if missing)
+    const privateKey = formatPrivateKey(rawPrivateKey)
+    if (privateKey !== rawPrivateKey) {
+      if (environment === 'testnet') {
+        setTestnetPrivateKey(privateKey)
+      } else {
+        setMainnetPrivateKey(privateKey)
+      }
+      toast.success('Added 0x prefix automatically')
+    }
+
+    // Check for common mistakes
+    const inputType = detectInputType(privateKey)
+    if (inputType === 'wallet_address') {
+      toast.error('You entered a wallet ADDRESS (40 chars), not a private key (64 chars). Please export your private key from your wallet.')
+      return
+    }
+
     // Validate private key format
-    if (!privateKey.startsWith('0x') || privateKey.length !== 66) {
-      toast.error('Invalid private key format. Must be 0x followed by 64 hex characters')
+    if (inputType !== 'valid_key') {
+      toast.error('Invalid private key format. Must be 64 hex characters (0x prefix will be added automatically).')
       return
     }
 
@@ -271,7 +317,9 @@ export default function WalletConfigPanel({
     setDefaultLeverage: (v: number) => void,
     showKey: boolean,
     setShowKey: (v: boolean) => void,
-    testing: boolean
+    testing: boolean,
+    inputWarning: string | null,
+    setInputWarning: (v: string | null) => void
   ) => {
     const envName = environment === 'testnet' ? 'Testnet' : 'Mainnet'
     const badgeVariant = environment === 'testnet' ? 'default' : 'destructive'
@@ -319,13 +367,13 @@ export default function WalletConfigPanel({
                   onClick={async () => {
                     const success = await copyToClipboard(wallet.walletAddress || '');
                     if (success) {
-                      toast.success('钱包地址已复制到剪贴板');
+                      toast.success('Wallet address copied to clipboard');
                     } else {
-                      toast.error('复制失败');
+                      toast.error('Failed to copy');
                     }
                   }}
                   className="cursor-pointer"
-                  title="复制钱包地址"
+                  title="Copy wallet address"
                 >
                   <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
                 </button>
@@ -394,9 +442,27 @@ export default function WalletConfigPanel({
                 <Input
                   type={showKey ? 'text' : 'password'}
                   value={privateKey}
-                  onChange={(e) => setPrivateKey(e.target.value)}
-                  placeholder="0x..."
-                  className="font-mono text-xs h-8"
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setPrivateKey(value)
+                    const inputType = detectInputType(value)
+                    if (inputType === 'wallet_address') {
+                      setInputWarning('This looks like a wallet ADDRESS (40 chars), not a private key (64 chars).')
+                    } else if (inputType === 'invalid' && value.trim()) {
+                      setInputWarning('Invalid format. Private key must be 64 hex characters.')
+                    } else {
+                      setInputWarning(null)
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const formatted = formatPrivateKey(e.target.value)
+                    if (formatted !== privateKey && detectInputType(formatted) === 'valid_key') {
+                      setPrivateKey(formatted)
+                      toast.success('Added 0x prefix automatically')
+                    }
+                  }}
+                  placeholder="0x... or paste without 0x prefix"
+                  className={`font-mono text-xs h-8 ${inputWarning ? 'border-red-500' : ''}`}
                 />
                 <Button
                   type="button"
@@ -408,8 +474,11 @@ export default function WalletConfigPanel({
                   {showKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                 </Button>
               </div>
+              {inputWarning && (
+                <p className="text-xs text-red-500">{inputWarning}</p>
+              )}
               <p className="text-xs text-muted-foreground">
-                Encrypted before storage
+                64 hex chars (0x auto-added). DEX needs private key to sign on-chain transactions.
               </p>
             </div>
 
@@ -505,7 +574,9 @@ export default function WalletConfigPanel({
           setTestnetDefaultLeverage,
           showTestnetKey,
           setShowTestnetKey,
-          testingTestnet
+          testingTestnet,
+          testnetInputWarning,
+          setTestnetInputWarning
         )}
 
         {renderWalletBlock(
@@ -521,7 +592,9 @@ export default function WalletConfigPanel({
           setMainnetDefaultLeverage,
           showMainnetKey,
           setShowMainnetKey,
-          testingMainnet
+          testingMainnet,
+          mainnetInputWarning,
+          setMainnetInputWarning
         )}
       </div>
 
