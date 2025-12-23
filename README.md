@@ -1,5 +1,7 @@
 # <img width="40" height="40" alt="logo_app" src="https://github.com/user-attachments/assets/911ba846-a08b-4e3e-b119-ec1e78347288" style="vertical-align: middle;" /> Hyper Alpha Arena
 
+**English** | [简体中文](./README.zh-CN.md)
+
 > A **production-ready**, open-source AI trading platform that enables anyone—**with or without coding experience**—to deploy autonomous LLM-powered cryptocurrency trading strategies. Features built-in AI assistants for signal creation and prompt generation. Supports Hyperliquid DEX (testnet paper trading & mainnet real trading), with Binance and Aster DEX integration planned. **English & 中文 supported.**
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
