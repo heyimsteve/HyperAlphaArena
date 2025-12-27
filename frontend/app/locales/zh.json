@@ -865,6 +865,9 @@
     "unattributed": "未归因",
     "aiAnalysisBtn": "AI归因分析",
     "notice": "归因分析仅统计AI决策表现，非钱包整体表现。数据来源于本地AI决策日志，旧版本数据可能不完整。",
+    "syncWarning": "检测到 {{count}} 条交易记录尚未同步盈亏数据，统计结果可能不准确",
+    "syncPnl": "同步盈亏数据",
+    "syncing": "同步中...",
     "aiWinRate": "AI胜率",
     "operationTooltip": "显示AI的决策意图。如果存在反向持仓，Buy/Sell可能触发平仓（如持有空仓时Buy=平空仓），从而产生盈亏。",
     "aiAnalysis": {

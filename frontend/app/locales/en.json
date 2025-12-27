@@ -855,6 +855,9 @@
     "unattributed": "Unattributed",
     "aiAnalysisBtn": "AI Attribution",
     "notice": "Attribution analyzes AI decision performance only, not overall wallet performance. Data comes from local AI decision logs. Legacy data may be incomplete.",
+    "syncWarning": "{{count}} trade(s) have not synced PnL data. Statistics may be inaccurate.",
+    "syncPnl": "Sync PnL Data",
+    "syncing": "Syncing...",
     "aiWinRate": "AI Win Rate",
     "operationTooltip": "Shows AI's decision intent. Buy/Sell may trigger position closure if opposite position exists (e.g., Buy while holding short = close short), resulting in realized PnL.",
     "aiAnalysis": {

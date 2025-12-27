@@ -914,6 +914,38 @@ def get_aggregated_analytics(
     }
 
 
+@router.get("/check-pnl-status")
+def check_pnl_sync_status(
+    trading_mode: Optional[str] = Query(None, regex="^(paper|testnet|mainnet)$"),
+    db: Session = Depends(get_db),
+):
+    """
+    Check if there are trades that need PnL synchronization.
+    Returns the count of unsynchronized trades.
+    """
+    query = db.query(AIDecisionLog).filter(
+        AIDecisionLog.operation.in_(["buy", "sell", "close"]),
+        AIDecisionLog.executed == "true",
+        AIDecisionLog.pnl_updated_at == None,
+    )
+
+    if trading_mode:
+        if trading_mode == "paper":
+            query = query.filter(AIDecisionLog.hyperliquid_environment == None)
+        else:
+            query = query.filter(AIDecisionLog.hyperliquid_environment == trading_mode)
+    else:
+        # Only check Hyperliquid trades (testnet/mainnet)
+        query = query.filter(AIDecisionLog.hyperliquid_environment.isnot(None))
+
+    unsync_count = query.count()
+
+    return {
+        "needs_sync": unsync_count > 0,
+        "unsync_count": unsync_count,
+    }
+
+
 @router.post("/update-pnl")
 def update_pnl_data(db: Session = Depends(get_db)):
     """
@@ -1058,7 +1090,7 @@ def _process_fills_for_environment(
             result["skipped"] += 1
 
     # Update AIDecisionLog records
-    # Match by hyperliquid_order_id (new records) or by time window (historical)
+    # Match by hyperliquid_order_id, tp_order_id, sl_order_id and accumulate PnL
     decisions = db.query(AIDecisionLog).filter(
         AIDecisionLog.operation.in_(["buy", "sell", "close"]),
         AIDecisionLog.executed == "true",
@@ -1067,18 +1099,30 @@ def _process_fills_for_environment(
 
     for decision in decisions:
         updated = False
+        total_pnl = Decimal("0")
+        matched_order_ids = set()
 
-        # Try direct match by hyperliquid_order_id
-        if decision.hyperliquid_order_id:
-            order_id = str(decision.hyperliquid_order_id)
-            if order_id in order_aggregates:
-                agg = order_aggregates[order_id]
-                if agg["total_pnl"] != 0:  # Only update if there's actual PnL
-                    decision.realized_pnl = agg["total_pnl"]
-                    decision.pnl_updated_at = datetime.utcnow()
-                    updated = True
+        # Try direct match by hyperliquid_order_id, tp_order_id, sl_order_id
+        order_ids_to_check = [
+            decision.hyperliquid_order_id,
+            decision.tp_order_id,
+            decision.sl_order_id,
+        ]
 
-        # Fallback: match by time window using HyperliquidTrade
+        for oid in order_ids_to_check:
+            if oid:
+                order_id_str = str(oid)
+                if order_id_str in order_aggregates and order_id_str not in matched_order_ids:
+                    agg = order_aggregates[order_id_str]
+                    total_pnl += agg["total_pnl"]
+                    matched_order_ids.add(order_id_str)
+
+        if total_pnl != 0:
+            decision.realized_pnl = total_pnl
+            decision.pnl_updated_at = datetime.utcnow()
+            updated = True
+
+        # Fallback: match by time window using HyperliquidTrade (only if no direct match)
         if not updated and decision.decision_time:
             from datetime import timedelta
             time_window = timedelta(minutes=5)

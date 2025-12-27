@@ -10,9 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { AlertTriangle, Sparkles, X, Info } from 'lucide-react'
+import { AlertTriangle, Sparkles, X, Info, RefreshCw } from 'lucide-react'
 import AiAttributionChatModal from './AiAttributionChatModal'
-import { TradingAccount } from '@/lib/api'
+import { TradingAccount, checkPnlSyncStatus, updateArenaPnl } from '@/lib/api'
 
 // Types
 interface SummaryMetrics {
@@ -111,10 +111,42 @@ export default function AttributionAnalysis() {
   const [showNotice, setShowNotice] = useState(true)
   const [aiChatOpen, setAiChatOpen] = useState(false)
 
+  // PnL sync status
+  const [needsSync, setNeedsSync] = useState(false)
+  const [unsyncCount, setUnsyncCount] = useState(0)
+  const [syncing, setSyncing] = useState(false)
+
   // Load accounts on mount
   useEffect(() => {
     fetchAccounts().then(setAccounts).catch(console.error)
   }, [])
+
+  // Check PnL sync status when environment changes
+  useEffect(() => {
+    checkPnlSyncStatus(environment)
+      .then(status => {
+        setNeedsSync(status.needs_sync)
+        setUnsyncCount(status.unsync_count)
+      })
+      .catch(console.error)
+  }, [environment])
+
+  // Handle PnL sync
+  const handleSyncPnl = async () => {
+    setSyncing(true)
+    try {
+      await updateArenaPnl()
+      // Recheck status and reload data
+      const status = await checkPnlSyncStatus(environment)
+      setNeedsSync(status.needs_sync)
+      setUnsyncCount(status.unsync_count)
+      await loadData()
+    } catch (error) {
+      console.error('Failed to sync PnL:', error)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   // Load data when filters change
   useEffect(() => {
@@ -181,6 +213,32 @@ export default function AttributionAnalysis() {
           <button onClick={() => setShowNotice(false)} className="text-amber-600 hover:text-amber-700 dark:text-amber-500 dark:hover:text-amber-400 p-0.5">
             <X className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {/* PnL Sync Warning */}
+      {needsSync && (
+        <div className="flex items-center gap-3 p-3 rounded-lg border border-orange-500/60 bg-orange-500/15">
+          <RefreshCw className="h-4 w-4 text-orange-600 dark:text-orange-400 flex-shrink-0" />
+          <p className="flex-1 text-sm text-orange-700 dark:text-orange-300">
+            {t('attribution.syncWarning', { count: unsyncCount })}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleSyncPnl}
+            disabled={syncing}
+            className="border-orange-500/60 text-orange-700 hover:bg-orange-500/20 dark:text-orange-300"
+          >
+            {syncing ? (
+              <>
+                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                {t('attribution.syncing', 'Syncing...')}
+              </>
+            ) : (
+              t('attribution.syncPnl', 'Sync PnL Data')
+            )}
+          </Button>
         </div>
       )}
 

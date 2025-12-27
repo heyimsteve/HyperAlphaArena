@@ -543,6 +543,19 @@ export async function updateArenaPnl(): Promise<UpdatePnlResponse> {
   return response.json()
 }
 
+export interface PnlSyncStatus {
+  needs_sync: boolean
+  unsync_count: number
+}
+
+export async function checkPnlSyncStatus(tradingMode?: string): Promise<PnlSyncStatus> {
+  const params = new URLSearchParams()
+  if (tradingMode) params.append('trading_mode', tradingMode)
+  const query = params.toString()
+  const response = await apiRequest(`/arena/check-pnl-status${query ? `?${query}` : ''}`)
+  return response.json()
+}
+
 export interface ArenaModelChatEntry {
   id: number
   account_id: number

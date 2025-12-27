@@ -910,8 +910,8 @@ export default function AlphaArenaFeed({
                           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pt-1 border-t border-border/50">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
                               trade.signal_trigger_id
-                                ? 'bg-purple-100 text-purple-700'
-                                : 'bg-blue-100 text-blue-700'
+                                ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                             }`}>
                               {trade.signal_trigger_id
                                 ? t('feed.signalPoolTrigger', 'Signal Pool')
@@ -1005,8 +1005,8 @@ export default function AlphaArenaFeed({
                           )}
                           <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
                             entry.signal_trigger_id
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-blue-100 text-blue-700'
+                              ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                              : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                           }`}>
                             {entry.signal_trigger_id
                               ? t('feed.signalPoolTrigger', 'Signal Pool')
