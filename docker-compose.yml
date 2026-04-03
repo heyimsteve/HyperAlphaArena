@@ -35,7 +35,7 @@ services:
       DATABASE_URL: postgresql://alpha_user:alpha_pass@postgres:5432/alpha_arena
       SNAPSHOT_DATABASE_URL: postgresql://alpha_user:alpha_pass@postgres:5432/alpha_snapshots
       # Hyperliquid Builder Fee Configuration
-      HYPERLIQUID_BUILDER_ADDRESS: "0x012E82f81e506b8f0EF69FF719a6AC65822b5924"
+      HYPERLIQUID_BUILDER_ADDRESS: "0x950D50d2e1C009212B1511e1Ec06F572d577AC15"
       HYPERLIQUID_BUILDER_FEE: "30"
       # Binance Broker Configuration
       BINANCE_BROKER_ID: "tbyPbcd9"
