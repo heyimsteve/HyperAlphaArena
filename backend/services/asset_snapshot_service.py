@@ -5,6 +5,7 @@ Record account asset snapshots on price updates.
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List
@@ -15,11 +16,14 @@ from database.connection import SessionLocal
 from database.models import Account, AccountAssetSnapshot, Position
 from services.asset_curve_calculator import invalidate_asset_curve_cache
 from services.market_data import get_last_price
-from api.ws import broadcast_arena_asset_update, manager
+from api.ws import broadcast_arena_asset_update, get_current_thread_count, manager
 
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_RETENTION_HOURS = 24 * 30  # Keep 30 days of asset snapshots
+SNAPSHOT_BROADCAST_WARNING_COOLDOWN_SECONDS = 300
+SNAPSHOT_BROADCAST_THREAD_WARNING_THRESHOLD = 200
+_last_broadcast_warning_at = 0.0
 
 
 def _get_active_accounts(db: Session) -> List[Account]:
@@ -35,7 +39,7 @@ _last_snapshot_time = 0
 
 def handle_price_update(event: Dict[str, Any]) -> None:
     """Persist account asset snapshots based on the latest price event."""
-    global _last_snapshot_time
+    global _last_snapshot_time, _last_broadcast_warning_at
 
     # Limit to once per 60 seconds
     import time
@@ -139,6 +143,22 @@ def handle_price_update(event: Dict[str, Any]) -> None:
             invalidate_asset_curve_cache()
 
         if manager.has_connections():
+            thread_count = get_current_thread_count()
+            if thread_count >= SNAPSHOT_BROADCAST_THREAD_WARNING_THRESHOLD:
+                now = time.time()
+                if now - _last_broadcast_warning_at >= SNAPSHOT_BROADCAST_WARNING_COOLDOWN_SECONDS:
+                    _last_broadcast_warning_at = now
+                    connection_stats = manager.get_connection_stats()
+                    logger.warning(
+                        "[AssetSnapshot Diagnostic] broadcasting arena asset update: "
+                        "threads=%s total_connections=%s active_accounts=%s accounts_payload=%s trigger=%s.%s",
+                        thread_count,
+                        connection_stats["total_connections"],
+                        connection_stats["active_accounts"],
+                        len(accounts_payload),
+                        trigger_symbol,
+                        trigger_market,
+                    )
             update_payload = {
                 "generated_at": event_time.isoformat(),
                 "totals": {
@@ -153,7 +173,10 @@ def handle_price_update(event: Dict[str, Any]) -> None:
                 "accounts": accounts_payload,
             }
             try:
-                manager.schedule_task(broadcast_arena_asset_update(update_payload))
+                manager.schedule_task(
+                    broadcast_arena_asset_update(update_payload),
+                    source="asset_snapshot",
+                )
             except Exception as broadcast_err:
                 logger.debug("Failed to schedule arena asset broadcast: %s", broadcast_err)
 

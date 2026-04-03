@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from math import sqrt
 from statistics import mean, pstdev
 from typing import Dict, List, Optional, Tuple
+import time
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -37,6 +38,7 @@ from services.hyperliquid_cache import (
     get_cached_positions,
 )
 from utils.encryption import decrypt_private_key
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -551,7 +553,24 @@ def get_completed_trades(
     db: Session = Depends(get_db),
 ):
     """Return recent trades across all AI accounts, filtered by trading mode."""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
+
+    def _log_request() -> None:
+        log_hot_path_delta(
+            logger,
+            "arena:trades",
+            "/api/arena/trades",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            trading_mode=trading_mode,
+            limit=limit,
+            exchange=exchange,
+        )
+
     if wallet_address and trading_mode not in ("testnet", "mainnet"):
+        _log_request()
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "accounts": [],
@@ -578,6 +597,7 @@ def get_completed_trades(
             snapshot_db.close()
 
         if not hyper_trades:
+            _log_request()
             return {
                 "generated_at": datetime.utcnow().isoformat(),
                 "accounts": [],
@@ -877,6 +897,7 @@ def get_completed_trades(
             else:
                 all_trades = [t for t in all_trades if t.get("exchange") == exchange]
 
+        _log_request()
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "accounts": list(accounts_meta.values()),
@@ -901,6 +922,7 @@ def get_completed_trades(
     trade_rows = query.limit(limit).all()
 
     if not trade_rows:
+        _log_request()
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "accounts": [],
@@ -948,6 +970,7 @@ def get_completed_trades(
             "model": account.model,
         }
 
+    _log_request()
     return {
         "generated_at": datetime.utcnow().isoformat(),
         "accounts": list(accounts_meta.values()),
@@ -1159,6 +1182,19 @@ def get_positions_snapshot(
     db: Session = Depends(get_db),
 ):
     """Return consolidated positions and cash for active AI accounts, filtered by trading mode."""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
+
+    def _log_request() -> None:
+        log_hot_path_delta(
+            logger,
+            "arena:positions",
+            "/api/arena/positions",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            trading_mode=trading_mode,
+        )
 
     # For Hyperliquid modes (testnet/mainnet), fetch real-time data from exchanges
     if trading_mode and trading_mode in ["testnet", "mainnet"]:
@@ -1166,6 +1202,7 @@ def get_positions_snapshot(
         # Also include Binance accounts
         binance_accounts = _get_binance_positions(db, account_id, trading_mode)
         result["accounts"] = result.get("accounts", []) + binance_accounts
+        _log_request()
         return result
 
     # For paper mode (or no mode specified), query local database
@@ -1250,6 +1287,7 @@ def get_positions_snapshot(
             }
         )
 
+    _log_request()
     return {
         "generated_at": datetime.utcnow().isoformat(),
         "trading_mode": trading_mode or "paper",

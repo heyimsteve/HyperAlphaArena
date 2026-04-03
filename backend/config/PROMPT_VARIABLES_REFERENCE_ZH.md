@@ -27,6 +27,34 @@ triggered_signals:
     current_value: 3.5
 ```
 
+当由**钱包信号**触发时（Hyper Insight 钱包追踪）：
+```
+=== TRIGGER CONTEXT ===
+trigger_type: wallet_signal
+signal_pool_name: BTC Whale Tracker
+trigger_symbol: ETH
+address: 0x84d5c9e6a6944356a01ffc9728610227bd1a670e
+event_type: position_change
+event_level: significant
+summary: Real-time: opened ETH $50,000
+action: open
+direction: long
+notional_value: 50000.0
+closed_pnl: 0.0
+average_price: 2500.5
+start_position: 0.0
+end_position: 20.0
+fills_count: 5
+```
+
+钱包信号字段说明：
+- `event_type`：position_change, equity_change, funding, transfer, liquidation
+- `event_level`：normal, significant, critical
+- `tier`（在 summary 前缀中）："Real-time"（付费 WS 实时成交）或 "Polling"（快照对比）
+- `action`：open, close, add, reduce, flip, update（仅 position_change）
+- `direction`：long, short, flat（仅 position_change）
+- Polling 事件使用 `old_value`/`new_value` 而非基于 fills 的字段
+
 当由**定时间隔**触发时：
 ```
 === TRIGGER CONTEXT ===

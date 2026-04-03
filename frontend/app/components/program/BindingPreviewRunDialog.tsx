@@ -198,6 +198,9 @@ function RightPanel({ result, expandedSections, toggleSection }: any) {
               <div className="font-medium text-muted-foreground mb-1">Basic Info</div>
               <div>Environment: <span className="font-mono">{inputData.environment}</span></div>
               <div>Trigger: <span className="font-mono">{inputData.trigger_symbol || '(scheduled)'}</span> ({inputData.trigger_type})</div>
+              {inputData.signal_source_type && (
+                <div>Source: <span className="font-mono">{inputData.signal_source_type}</span></div>
+              )}
               <div>Balance: <span className="font-mono">${inputData.available_balance?.toFixed(2)}</span></div>
               <div>Equity: <span className="font-mono">${inputData.total_equity?.toFixed(2)}</span></div>
               <div>Margin Used: <span className="font-mono">{inputData.margin_usage_percent?.toFixed(1)}%</span></div>
@@ -218,6 +221,8 @@ function RightPanel({ result, expandedSections, toggleSection }: any) {
   signal_pool_name: inputData.signal_pool_name,
   pool_logic: inputData.pool_logic,
   triggered_signals: inputData.triggered_signals,
+  signal_source_type: inputData.signal_source_type,
+  wallet_event: inputData.wallet_event,
 }, null, 2)}
                   </pre>
                 </CollapsibleContent>

@@ -1087,6 +1087,35 @@ def _build_prompt_context(
                                 parts.append("Persistent" if dh == -1 else f"Decay={dh}h")
                             if parts:
                                 lines.append(f"    factor_effectiveness: {' '.join(parts)}")
+        elif trigger_type == "wallet_signal":
+            pool_name = trigger_context.get("signal_pool_name", "Unknown")
+            trigger_symbol = trigger_context.get("trigger_symbol", "N/A")
+            wallet_event = trigger_context.get("wallet_event") or {}
+            detail = wallet_event.get("detail") or {}
+
+            lines.append(f"signal_pool_name: {pool_name}")
+            lines.append(f"trigger_symbol: {trigger_symbol}")
+            lines.append(f"address: {wallet_event.get('address', 'N/A')}")
+            lines.append(f"event_type: {wallet_event.get('event_type', 'N/A')}")
+            lines.append(f"event_level: {wallet_event.get('event_level', 'N/A')}")
+            lines.append(f"summary: {wallet_event.get('summary', 'N/A')}")
+            if detail:
+                if detail.get("action") is not None:
+                    lines.append(f"action: {detail.get('action')}")
+                if detail.get("direction") is not None:
+                    lines.append(f"direction: {detail.get('direction')}")
+                if detail.get("notional_value") is not None:
+                    lines.append(f"notional_value: {detail.get('notional_value')}")
+                if detail.get("closed_pnl") is not None:
+                    lines.append(f"closed_pnl: {detail.get('closed_pnl')}")
+                if detail.get("average_price") is not None:
+                    lines.append(f"average_price: {detail.get('average_price')}")
+                if detail.get("start_position") is not None:
+                    lines.append(f"start_position: {detail.get('start_position')}")
+                if detail.get("end_position") is not None:
+                    lines.append(f"end_position: {detail.get('end_position')}")
+                if detail.get("fills_count") is not None:
+                    lines.append(f"fills_count: {detail.get('fills_count')}")
         elif trigger_type == "scheduled":
             interval = trigger_context.get("trigger_interval", "N/A")
             lines.append(f"trigger_interval: {interval} seconds")

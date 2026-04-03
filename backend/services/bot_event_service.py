@@ -14,6 +14,62 @@ from database.models import HyperAiConversation, HyperAiMessage, BotConfig
 logger = logging.getLogger(__name__)
 
 
+def _format_money(value: Any) -> Optional[str]:
+    if not isinstance(value, (int, float)):
+        return None
+    abs_value = abs(float(value))
+    if abs_value >= 1000:
+        return f"${value:,.0f}"
+    if abs_value >= 1:
+        return f"${value:,.2f}"
+    return f"${value:,.4f}"
+
+
+def _format_price(value: Any) -> Optional[str]:
+    if not isinstance(value, (int, float)):
+        return None
+    return f"{float(value):,.6f}".rstrip("0").rstrip(".")
+
+
+def _wallet_action_label(action: Any) -> Optional[str]:
+    mapping = {
+        "open": "Opened",
+        "add": "Increased",
+        "reduce": "Reduced",
+        "close": "Closed",
+        "flip": "Flipped",
+        "update": "Updated",
+    }
+    if not isinstance(action, str):
+        return None
+    return mapping.get(action.strip().lower(), action.strip().replace("_", " ").title())
+
+
+def _wallet_direction_label(direction: Any) -> Optional[str]:
+    mapping = {
+        "long": "Long",
+        "short": "Short",
+        "flat": "Flat",
+    }
+    if not isinstance(direction, str):
+        return None
+    return mapping.get(direction.strip().lower(), direction.strip().replace("_", " ").title())
+
+
+def _wallet_event_type_label(event_type: Any) -> Optional[str]:
+    mapping = {
+        "position_change": "Position Change",
+        "equity_change": "Equity Change",
+        "fill": "Trade Fill",
+        "funding": "Funding",
+        "transfer": "Transfer",
+        "liquidation": "Liquidation",
+    }
+    if not isinstance(event_type, str):
+        return None
+    return mapping.get(event_type.strip().lower(), event_type.strip().replace("_", " ").title())
+
+
 def get_bot_conversations(db: Session) -> List[HyperAiConversation]:
     """Get all Bot conversations (one per platform)."""
     return db.query(HyperAiConversation).filter(
@@ -84,6 +140,45 @@ def _format_event_message(event_type: str, data: Dict[str, Any]) -> str:
     if event_type == "signal_triggered":
         pool_name = data.get('pool_name', 'Unknown')
         symbol = data.get('symbol', 'N/A')
+        wallet_event = data.get('wallet_event')
+        if isinstance(wallet_event, dict):
+            event_type_name = _wallet_event_type_label(wallet_event.get('event_type')) or "Wallet Event"
+            summary = wallet_event.get('summary') or 'Wallet event triggered'
+            detail = wallet_event.get('detail') if isinstance(wallet_event.get('detail'), dict) else {}
+            address = str(wallet_event.get('address', ''))[:6]
+            address_tail = str(wallet_event.get('address', ''))[-4:]
+            short_address = f"{address}...{address_tail}" if address and address_tail else "N/A"
+            action = _wallet_action_label(detail.get("action"))
+            direction = _wallet_direction_label(detail.get("direction"))
+            notional_value = _format_money(detail.get("notional_value"))
+            closed_pnl = _format_money(detail.get("closed_pnl"))
+            average_price = _format_price(detail.get("average_price"))
+
+            extra_lines = []
+            if action:
+                if direction and direction != "Flat":
+                    extra_lines.append(f"Action: {action} {direction}")
+                else:
+                    extra_lines.append(f"Action: {action}")
+            elif direction:
+                extra_lines.append(f"Direction: {direction}")
+
+            extra_lines.append(f"Type: {event_type_name}")
+            extra_lines.append(f"Wallet: {short_address}")
+            extra_lines.append(f"Symbol: {symbol}")
+            if notional_value:
+                extra_lines.append(f"Notional: {notional_value}")
+            if closed_pnl:
+                extra_lines.append(f"Realized PnL: {closed_pnl}")
+            if average_price:
+                extra_lines.append(f"Avg Price: {average_price}")
+
+            return (
+                f"{header}"
+                f"🔔 【{pool_name}】 Wallet signal triggered\n"
+                f"{summary}\n"
+                f"{chr(10).join(extra_lines)}"
+            )
         triggered = data.get('triggered_signals', [])
         signals_text = ", ".join(
             f"{s.get('signal_name', s.get('metric', 'N/A'))}={s.get('current_value', 'N/A'):.4f}"

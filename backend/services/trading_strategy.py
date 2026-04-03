@@ -357,6 +357,8 @@ class HyperliquidStrategyManager(StrategyManager):
         pool_id = pool.get("pool_id")  # Fixed: key is "pool_id" not "id"
         pool_name = pool.get("pool_name", "Unknown")
         event_time = datetime.now(timezone.utc)
+        trigger_type = pool.get("trigger_type", "signal")
+        wallet_event = pool.get("wallet_event")
 
         print(f"[HyperliquidStrategy] Signal pool triggered: {pool_name} (pool_id={pool_id}) on {symbol}")
         print(f"[HyperliquidStrategy] Checking {len(self.strategies)} strategies for pool_id={pool_id}")
@@ -378,19 +380,23 @@ class HyperliquidStrategyManager(StrategyManager):
                 if state.mark_triggered_by_signal(event_time):
                     # Build trigger context for AI prompt
                     trigger_context = {
-                        "trigger_type": "signal",
                         "signal_pool_id": pool_id,
                         "signal_pool_name": pool_name,
                         "pool_logic": pool.get("logic", "OR"),
-                        "triggered_signals": triggered_signals,
                         "trigger_symbol": symbol,
                         "market_data_snapshot": market_data,
                         "signal_trigger_id": pool.get("trigger_log_id"),  # For decision tracking
                     }
+                    if trigger_type == "wallet_signal":
+                        trigger_context["trigger_type"] = "wallet_signal"
+                        trigger_context["wallet_event"] = wallet_event
+                    else:
+                        trigger_context["trigger_type"] = "signal"
+                        trigger_context["triggered_signals"] = triggered_signals
                     print(f"[HyperliquidStrategy] Executing strategy for account {account_id} (signal pool: {pool_name})")
                     self._execute_strategy(
                         account_id, symbol, event_time,
-                        trigger_type="signal", trigger_context=trigger_context
+                        trigger_type=trigger_type, trigger_context=trigger_context
                     )
                 else:
                     print(f"[HyperliquidStrategy] Account {account_id} mark_triggered_by_signal returned False (already running?)")

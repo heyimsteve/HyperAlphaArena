@@ -148,12 +148,12 @@ def execute_get_signal_pools(db, exchange: str = "all") -> str:
         # Get signal pools (with exchange filter if needed)
         if exchange and exchange != "all":
             pools_result = db.execute(text("""
-                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange
+                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange, source_type, source_config
                 FROM signal_pools WHERE exchange = :exchange AND (is_deleted IS NULL OR is_deleted = false) ORDER BY id
             """), {"exchange": exchange})
         else:
             pools_result = db.execute(text("""
-                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange
+                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange, source_type, source_config
                 FROM signal_pools WHERE (is_deleted IS NULL OR is_deleted = false) ORDER BY id
             """))
 
@@ -167,33 +167,43 @@ def execute_get_signal_pools(db, exchange: str = "all") -> str:
                 symbols = json.loads(symbols)
 
             pool_exchange = row[6] if len(row) > 6 and row[6] else "hyperliquid"
+            source_type = row[7] if len(row) > 7 and row[7] else "market_signals"
+            source_config = row[8] if len(row) > 8 else {}
+            if isinstance(source_config, str):
+                try:
+                    source_config = json.loads(source_config)
+                except json.JSONDecodeError:
+                    source_config = {}
 
             # Get signal details for this pool
             pool_signals = []
-            for sig_id in (signal_ids or []):
-                if sig_id in signals_map:
-                    sig = signals_map[sig_id]
-                    cond = sig["condition"]
-                    metric = cond.get("metric", "unknown")
-                    pool_signals.append({
-                        "id": sig_id,
-                        "name": sig["name"],
-                        "description": sig["description"],
-                        "metric": metric,
-                        "operator": cond.get("operator", ""),
-                        "threshold": cond.get("threshold", ""),
-                        "time_window": cond.get("time_window", "5m"),
-                        "metric_explanation": SIGNAL_METRIC_EXPLANATIONS.get(metric, {})
-                    })
+            if source_type == "market_signals":
+                for sig_id in (signal_ids or []):
+                    if sig_id in signals_map:
+                        sig = signals_map[sig_id]
+                        cond = sig["condition"]
+                        metric = cond.get("metric", "unknown")
+                        pool_signals.append({
+                            "id": sig_id,
+                            "name": sig["name"],
+                            "description": sig["description"],
+                            "metric": metric,
+                            "operator": cond.get("operator", ""),
+                            "threshold": cond.get("threshold", ""),
+                            "time_window": cond.get("time_window", "5m"),
+                            "metric_explanation": SIGNAL_METRIC_EXPLANATIONS.get(metric, {})
+                        })
 
             pools.append({
                 "id": row[0],
                 "name": row[1],
                 "exchange": pool_exchange,
+                "source_type": source_type,
                 "logic": row[5] or "OR",
                 "symbols": symbols or [],
                 "enabled": row[4],
-                "signals": pool_signals
+                "signals": pool_signals,
+                "source_config": source_config if source_type == "wallet_tracking" else {}
             })
 
         result = {
@@ -301,5 +311,4 @@ def execute_run_signal_backtest(db, pool_id: int, symbol: str = "BTC", hours: in
     except Exception as e:
         logger.error(f"[run_signal_backtest] Error: {e}")
         return json.dumps({"error": str(e)})
-
 

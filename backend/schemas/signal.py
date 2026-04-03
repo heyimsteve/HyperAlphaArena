@@ -59,11 +59,13 @@ class SignalDefinitionResponse(BaseModel):
 class SignalPoolCreate(BaseModel):
     """Create signal pool request"""
     pool_name: str = Field(..., max_length=100)
-    signal_ids: List[int] = []
-    symbols: List[str] = []
+    signal_ids: List[int] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
     enabled: bool = True
     logic: str = "OR"  # AND or OR logic for signal triggering
     exchange: str = "hyperliquid"
+    source_type: str = "market_signals"
+    source_config: Dict[str, Any] = Field(default_factory=dict)
 
 
 class SignalPoolUpdate(BaseModel):
@@ -74,6 +76,8 @@ class SignalPoolUpdate(BaseModel):
     enabled: Optional[bool] = None
     logic: Optional[str] = None  # AND or OR logic
     exchange: Optional[str] = None
+    source_type: Optional[str] = None
+    source_config: Optional[Dict[str, Any]] = None
 
 
 class SignalPoolResponse(BaseModel):
@@ -85,6 +89,8 @@ class SignalPoolResponse(BaseModel):
     enabled: bool
     logic: str = "OR"  # AND or OR logic
     exchange: str = "hyperliquid"
+    source_type: str = "market_signals"
+    source_config: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
     class Config:

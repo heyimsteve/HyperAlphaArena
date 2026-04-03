@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from typing import Any, Dict, Generator, List, Optional
 
@@ -48,7 +49,8 @@ from services.ai_stream_service import (
     get_buffer_manager,
     generate_task_id,
     run_ai_task_in_background,
-    format_sse_event
+    format_sse_event,
+    submit_ai_background_task,
 )
 from services.hyper_ai_llm_providers import get_provider, get_all_providers
 from services.hyper_ai_tools import HYPER_AI_TOOLS, execute_hyper_ai_tool
@@ -65,6 +67,8 @@ API_MAX_RETRIES = 5
 API_BASE_DELAY = 1.0
 API_MAX_DELAY = 16.0
 RETRYABLE_STATUS_CODES = {502, 503, 504, 429}
+_suggestions_update_lock = threading.Lock()
+_suggestions_update_running = False
 
 # System prompt paths
 SYSTEM_PROMPT_PATH = os.path.join(
@@ -1775,7 +1779,6 @@ def get_or_update_suggestions(db: Session) -> Dict[str, Any]:
     Returns current suggestions (may be stale) and triggers background update.
     """
     from datetime import datetime, timedelta
-    import threading
 
     profile = get_or_create_profile(db)
 
@@ -1808,7 +1811,18 @@ def get_or_update_suggestions(db: Session) -> Dict[str, Any]:
 
     # If stale, trigger async update
     if cache_stale:
+        with _suggestions_update_lock:
+            global _suggestions_update_running
+            if _suggestions_update_running:
+                return {
+                    "suggestions": cached_suggestions,
+                    "is_new_user": False,
+                    "updated_at": profile.suggested_questions_at.isoformat() if profile.suggested_questions_at else None
+                }
+            _suggestions_update_running = True
+
         def update_task():
+            global _suggestions_update_running
             from database.connection import SessionLocal
             task_db = SessionLocal()
             try:
@@ -1823,9 +1837,10 @@ def get_or_update_suggestions(db: Session) -> Dict[str, Any]:
                 logger.error(f"Failed to update suggestions: {e}")
             finally:
                 task_db.close()
+                with _suggestions_update_lock:
+                    _suggestions_update_running = False
 
-        thread = threading.Thread(target=update_task, daemon=True)
-        thread.start()
+        submit_ai_background_task(update_task)
 
     return {
         "suggestions": cached_suggestions,

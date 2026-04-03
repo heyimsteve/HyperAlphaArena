@@ -9,6 +9,7 @@ from typing import List, Optional
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import logging
+import time
 
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade, CryptoPrice, AccountAssetSnapshot, HyperliquidWallet, AccountPromptBinding
@@ -19,6 +20,7 @@ from repositories.strategy_repo import get_strategy_by_account, upsert_strategy
 from services.trading_strategy import hyper_strategy_manager
 from services.hyperliquid_cache import get_cached_account_state
 from services.entity_deletion_service import delete_trader
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +106,15 @@ def _serialize_strategy(account: Account, strategy, db: Session = None) -> Strat
 
 
 @router.get("/list")
-async def list_all_accounts(include_hidden: bool = False, db: Session = Depends(get_db)):
+def list_all_accounts(include_hidden: bool = False, db: Session = Depends(get_db)):
     """Get all active accounts (for paper trading demo)
 
     Args:
         include_hidden: If True, include accounts with show_on_dashboard=False.
                        Default False (only show visible accounts for Dashboard).
     """
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         from database.models import User
         from eth_account import Account as EthAccount
@@ -218,10 +222,19 @@ async def list_all_accounts(include_hidden: bool = False, db: Session = Depends(
     except Exception as e:
         logger.error(f"Failed to list accounts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list accounts: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "account:list",
+            "/api/account/list",
+            start_threads,
+            start_time,
+            include_hidden=include_hidden,
+        )
 
 
 @router.get("/{account_id}/overview")
-async def get_specific_account_overview(account_id: int, db: Session = Depends(get_db)):
+def get_specific_account_overview(account_id: int, db: Session = Depends(get_db)):
     """Get overview for a specific account"""
     try:
         # Get the specific account
@@ -271,7 +284,7 @@ async def get_specific_account_overview(account_id: int, db: Session = Depends(g
 
 
 @router.get("/{account_id}/strategy", response_model=StrategyConfig)
-async def get_account_strategy(account_id: int, db: Session = Depends(get_db)):
+def get_account_strategy(account_id: int, db: Session = Depends(get_db)):
     """Fetch AI trading strategy configuration for an account."""
     account = (
         db.query(Account)
@@ -305,7 +318,7 @@ async def get_account_strategy(account_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{account_id}/strategy", response_model=StrategyConfig)
-async def update_account_strategy(
+def update_account_strategy(
     account_id: int,
     payload: StrategyConfigUpdate,
     db: Session = Depends(get_db),
@@ -360,7 +373,7 @@ async def update_account_strategy(
 
 
 @router.get("/overview")
-async def get_account_overview(db: Session = Depends(get_db)):
+def get_account_overview(db: Session = Depends(get_db)):
     """Get overview for the default account (for paper trading demo)"""
     try:
         # Get the first active account (default account)
@@ -408,7 +421,7 @@ async def get_account_overview(db: Session = Depends(get_db)):
 
 
 @router.post("/")
-async def create_new_account(payload: dict, db: Session = Depends(get_db)):
+def create_new_account(payload: dict, db: Session = Depends(get_db)):
     """Create a new account for the default user (for paper trading demo)"""
     try:
         from database.models import User
@@ -515,7 +528,7 @@ async def create_new_account(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.put("/{account_id}")
-async def update_account_settings(account_id: int, payload: dict, db: Session = Depends(get_db)):
+def update_account_settings(account_id: int, payload: dict, db: Session = Depends(get_db)):
     """Update account settings (for paper trading demo)"""
     try:
         logger.info(f"Updating account {account_id} with payload: {payload}")
@@ -608,7 +621,7 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/asset-curve")
-async def get_asset_curve(
+def get_asset_curve(
     timeframe: str = "5m",
     trading_mode: str = "testnet",
     environment: Optional[str] = None,
@@ -619,6 +632,8 @@ async def get_asset_curve(
     db: Session = Depends(get_db)
 ):
     """Get asset curve data for all accounts (or specific account) with specified timeframe and trading mode"""
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         from services.asset_curve_calculator import get_all_asset_curves_data_new
         data = get_all_asset_curves_data_new(
@@ -635,10 +650,22 @@ async def get_asset_curve(
     except Exception as e:
         logger.error(f"Error fetching asset curve data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch asset curve data: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "account:asset-curve",
+            "/api/account/asset-curve",
+            start_threads,
+            start_time,
+            timeframe=timeframe,
+            trading_mode=trading_mode,
+            environment=environment,
+            account_id=account_id,
+        )
 
 
 @router.get("/asset-curve/timeframe")
-async def get_asset_curve_by_timeframe(
+def get_asset_curve_by_timeframe(
     timeframe: str = "1d",
     db: Session = Depends(get_db)
 ):
@@ -794,7 +821,7 @@ async def get_asset_curve_by_timeframe(
 
 
 @router.post("/test-llm")
-async def test_llm_connection(payload: dict):
+def test_llm_connection(payload: dict):
     """Test LLM connection with provided credentials"""
     try:
         import requests
@@ -1007,7 +1034,7 @@ async def test_llm_connection(payload: dict):
 
 
 @router.post("/{account_id}/trigger-ai-trade")
-async def trigger_ai_trade(
+def trigger_ai_trade(
     account_id: int,
     force_operation: str = None,  # Optional: "buy", "sell", "close", "hold"
     symbol: str = None,  # Optional: specific symbol to trade
@@ -1169,7 +1196,7 @@ async def trigger_ai_trade(
 
 
 @router.get("/hyperliquid/check-builder-authorization")
-async def check_builder_authorization(
+def check_builder_authorization(
     wallet_address: str,
     db: Session = Depends(get_db)
 ):
@@ -1233,7 +1260,7 @@ async def check_builder_authorization(
 
 
 @router.post("/hyperliquid/approve-builder")
-async def approve_builder_fee(
+def approve_builder_fee(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -1336,7 +1363,7 @@ async def approve_builder_fee(
 
 
 @router.get("/hyperliquid/check-mainnet-accounts")
-async def check_mainnet_accounts(
+def check_mainnet_accounts(
     db: Session = Depends(get_db)
 ):
     """
@@ -1520,7 +1547,7 @@ async def check_mainnet_accounts(
 
 
 @router.post("/{account_id}/disable-trading")
-async def disable_trading(
+def disable_trading(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -1578,7 +1605,7 @@ async def disable_trading(
 
 
 @router.patch("/dashboard-visibility")
-async def update_dashboard_visibility(
+def update_dashboard_visibility(
     visibility_updates: List[dict],
     db: Session = Depends(get_db)
 ):

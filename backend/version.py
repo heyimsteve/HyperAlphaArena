@@ -2,8 +2,8 @@
 Hyper Alpha Arena Version Information
 """
 
-__version__ = "0.9.9"
-__version_info__ = (0, 9, 9)
+__version__ = "0.9.10"
+__version_info__ = (0, 9, 10)
 
 # Version history
 # 0.9.6 - Sliding window IC, fetch_url tool, Hyper AI 100 iterations, sidebar collapse

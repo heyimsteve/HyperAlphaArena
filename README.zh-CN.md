@@ -60,6 +60,10 @@ Hyper Alpha Arena 是一个 AI 交易平台——让 GPT、Claude、Deepseek 这
 
 **程序化交易 (Program Trader)** - 用 Python 代码定义交易规则。历史数据回测验证策略盈利能力，上线前充分测试。AI 助手通过对话帮你编写和优化代码。
 
+### 聪明钱钱包信号接入
+
+可连接 [Hyper Insight](https://hyper.akooi.com/)，将巨鲸与聪明钱地址的跟踪动作同步到 Hyper Alpha Arena，作为钱包信号池使用。Hyper Insight 当前已收录约 **70,000** 个跟踪地址，这些钱包信号可用于触发 **AI Trader**、**Program Trader** 和 Bot 通知。
+
 ### AI 多智能体架构
 
 Hyper Alpha Arena 的核心差异化在于多智能体 AI 系统。不是单一聊天机器人，而是五个专业 AI 智能体协同覆盖完整交易工作流：

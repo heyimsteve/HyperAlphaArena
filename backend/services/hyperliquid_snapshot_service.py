@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -8,9 +9,11 @@ from database.models import Account, HyperliquidWallet
 from database.snapshot_connection import SnapshotSessionLocal
 from database.snapshot_models import HyperliquidAccountSnapshot
 from services.hyperliquid_environment import get_hyperliquid_client, get_global_trading_mode
-from api.ws import broadcast_arena_asset_update, manager
+from api.ws import broadcast_arena_asset_update, get_current_thread_count, manager
 
 logger = logging.getLogger(__name__)
+SNAPSHOT_BROADCAST_WARNING_COOLDOWN_SECONDS = 300
+SNAPSHOT_BROADCAST_THREAD_WARNING_THRESHOLD = 200
 
 
 class HyperliquidSnapshotService:
@@ -19,6 +22,7 @@ class HyperliquidSnapshotService:
     def __init__(self, interval_seconds: int = 300):
         self.interval_seconds = interval_seconds
         self.running = False
+        self._last_broadcast_warning_at = 0.0
 
     async def start(self):
         """Start snapshot service"""
@@ -100,6 +104,21 @@ class HyperliquidSnapshotService:
 
             # Broadcast arena asset update to WebSocket clients
             if accounts_payload and manager.has_connections():
+                thread_count = get_current_thread_count()
+                if thread_count >= SNAPSHOT_BROADCAST_THREAD_WARNING_THRESHOLD:
+                    now = time.time()
+                    if now - self._last_broadcast_warning_at >= SNAPSHOT_BROADCAST_WARNING_COOLDOWN_SECONDS:
+                        self._last_broadcast_warning_at = now
+                        connection_stats = manager.get_connection_stats()
+                        logger.warning(
+                            "[HyperliquidSnapshot Diagnostic] broadcasting arena asset update: "
+                            "threads=%s total_connections=%s active_accounts=%s accounts_payload=%s interval=%ss",
+                            thread_count,
+                            connection_stats["total_connections"],
+                            connection_stats["active_accounts"],
+                            len(accounts_payload),
+                            self.interval_seconds,
+                        )
                 from datetime import datetime, timezone
                 update_payload = {
                     "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -113,7 +132,10 @@ class HyperliquidSnapshotService:
                     "accounts": accounts_payload,
                 }
                 try:
-                    manager.schedule_task(broadcast_arena_asset_update(update_payload))
+                    manager.schedule_task(
+                        broadcast_arena_asset_update(update_payload),
+                        source="hyperliquid_snapshot",
+                    )
                     logger.debug(f"[HYPERLIQUID SNAPSHOT] Broadcasted arena asset update for {len(accounts_payload)} accounts")
                 except Exception as broadcast_err:
                     logger.debug(f"[HYPERLIQUID SNAPSHOT] Failed to broadcast arena asset update: {broadcast_err}")

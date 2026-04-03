@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+import json
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -22,8 +24,12 @@ from schemas.signal import (
     SignalTriggerLogResponse,
     SignalTriggerLogsResponse,
 )
+from services.hyper_insight_wallet_service import hyper_insight_wallet_service
 
 router = APIRouter(prefix="/api/signals", tags=["Signal System"])
+
+MARKET_SIGNAL_SOURCE = "market_signals"
+WALLET_TRACKING_SOURCE = "wallet_tracking"
 
 
 def get_db():
@@ -34,14 +40,80 @@ def get_db():
         db.close()
 
 
+def _parse_json_text(value, fallback):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return fallback
+    if value is None:
+        return fallback
+    return value
+
+
+def _normalize_source_type(source_type: Optional[str]) -> str:
+    normalized = (source_type or MARKET_SIGNAL_SOURCE).strip() or MARKET_SIGNAL_SOURCE
+    if normalized not in {MARKET_SIGNAL_SOURCE, WALLET_TRACKING_SOURCE}:
+        raise HTTPException(status_code=400, detail="Invalid source_type")
+    return normalized
+
+
+def _normalize_source_config(source_type: str, source_config):
+    parsed = _parse_json_text(source_config, {})
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="source_config must be an object")
+    if source_type == MARKET_SIGNAL_SOURCE:
+        return {}
+    return parsed
+
+
+def _parse_source_config_response(source_type: str, source_config):
+    parsed = _parse_json_text(source_config, {})
+    if not isinstance(parsed, dict):
+        parsed = {}
+    if source_type == MARKET_SIGNAL_SOURCE:
+        return {}
+    return parsed
+
+
+def _build_pool_response(row) -> SignalPoolResponse:
+    signal_ids = _parse_json_text(row[2], [])
+    symbols = _parse_json_text(row[3], [])
+    source_type = row[8] or MARKET_SIGNAL_SOURCE
+    source_config = _parse_source_config_response(source_type, row[9])
+    return SignalPoolResponse(
+        id=row[0],
+        pool_name=row[1],
+        signal_ids=signal_ids or [],
+        symbols=symbols or [],
+        enabled=row[4],
+        created_at=row[5],
+        logic=row[6] or "OR",
+        exchange=row[7] or "hyperliquid",
+        source_type=source_type,
+        source_config=source_config,
+    )
+
+
+def _schedule_wallet_runtime_refresh() -> None:
+    hyper_insight_wallet_service.request_refresh()
+
+
+class WalletTrackingRuntimeRequest(BaseModel):
+    enabled: bool
+    access_token: Optional[str] = None
+
+
+class WalletTrackingTokenRequest(BaseModel):
+    access_token: str
+
+
 # ============ Signal Definitions ============
 
 @router.get("", response_model=SignalListResponse)
 @router.get("/", response_model=SignalListResponse)
 def list_signals(db: Session = Depends(get_db)) -> SignalListResponse:
     """List all signal definitions and pools"""
-    import json
-
     signals_result = db.execute(text("""
         SELECT id, signal_name, description, trigger_condition, enabled, created_at, updated_at, exchange
         FROM signal_definitions WHERE (is_deleted IS NULL OR is_deleted = false) ORDER BY id
@@ -50,8 +122,7 @@ def list_signals(db: Session = Depends(get_db)) -> SignalListResponse:
     for row in signals_result:
         # Parse trigger_condition from JSON string if needed
         trigger_condition = row[3]
-        if isinstance(trigger_condition, str):
-            trigger_condition = json.loads(trigger_condition)
+        trigger_condition = _parse_json_text(trigger_condition, {})
         signals.append(SignalDefinitionResponse(
             id=row[0], signal_name=row[1], description=row[2],
             trigger_condition=trigger_condition, enabled=row[4],
@@ -59,25 +130,43 @@ def list_signals(db: Session = Depends(get_db)) -> SignalListResponse:
         ))
 
     pools_result = db.execute(text("""
-        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange
+        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange, source_type, source_config
         FROM signal_pools WHERE (is_deleted IS NULL OR is_deleted = false) ORDER BY id
     """))
     pools = []
     for row in pools_result:
-        # Parse JSON fields if they are strings
-        signal_ids = row[2]
-        if isinstance(signal_ids, str):
-            signal_ids = json.loads(signal_ids)
-        symbols = row[3]
-        if isinstance(symbols, str):
-            symbols = json.loads(symbols)
-        pools.append(SignalPoolResponse(
-            id=row[0], pool_name=row[1], signal_ids=signal_ids or [],
-            symbols=symbols or [], enabled=row[4], created_at=row[5],
-            logic=row[6] or "OR", exchange=row[7] or "hyperliquid"
-        ))
+        pools.append(_build_pool_response(row))
 
     return SignalListResponse(signals=signals, pools=pools)
+
+
+@router.get("/wallet-tracking/status")
+def get_wallet_tracking_status() -> dict[str, Any]:
+    """Get runtime status for Hyper Insight wallet tracking integration."""
+    return hyper_insight_wallet_service.get_status_snapshot()
+
+
+@router.put("/wallet-tracking/runtime")
+async def update_wallet_tracking_runtime(payload: WalletTrackingRuntimeRequest):
+    """Enable or disable runtime integration and optionally sync a fresh access token."""
+    await hyper_insight_wallet_service.set_enabled(payload.enabled)
+    if payload.access_token:
+        await hyper_insight_wallet_service.sync_access_token(payload.access_token)
+    return hyper_insight_wallet_service.get_status_snapshot()
+
+
+@router.post("/wallet-tracking/token")
+async def sync_wallet_tracking_token(payload: WalletTrackingTokenRequest):
+    """Sync the latest HAA access token for future reconnects."""
+    await hyper_insight_wallet_service.sync_access_token(payload.access_token)
+    return {"success": True}
+
+
+@router.delete("/wallet-tracking/token")
+async def clear_wallet_tracking_token():
+    """Clear the persisted runtime access token."""
+    await hyper_insight_wallet_service.clear_access_token()
+    return {"success": True}
 
 
 @router.post("/definitions", response_model=SignalDefinitionResponse)
@@ -186,10 +275,11 @@ def delete_signal(signal_id: int, db: Session = Depends(get_db)):
 @router.post("/pools", response_model=SignalPoolResponse)
 def create_pool(payload: SignalPoolCreate, db: Session = Depends(get_db)):
     """Create a new signal pool"""
-    import json
+    source_type = _normalize_source_type(payload.source_type)
+    source_config = _normalize_source_config(source_type, payload.source_config)
 
     # Validate that all signals belong to the same exchange as the pool
-    if payload.signal_ids:
+    if source_type == MARKET_SIGNAL_SOURCE and payload.signal_ids:
         result = db.execute(text("""
             SELECT id, exchange FROM signal_definitions WHERE id = ANY(:ids) AND (is_deleted IS NULL OR is_deleted = false)
         """), {"ids": payload.signal_ids})
@@ -202,71 +292,59 @@ def create_pool(payload: SignalPoolCreate, db: Session = Depends(get_db)):
                 )
 
     result = db.execute(text("""
-        INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled, logic, exchange)
-        VALUES (:name, :signal_ids, :symbols, :enabled, :logic, :exchange)
-        RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange
+        INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled, logic, exchange, source_type, source_config)
+        VALUES (:name, :signal_ids, :symbols, :enabled, :logic, :exchange, :source_type, :source_config)
+        RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange, source_type, source_config
     """), {
         "name": payload.pool_name,
-        "signal_ids": json.dumps(payload.signal_ids),
-        "symbols": json.dumps(payload.symbols),
+        "signal_ids": json.dumps(payload.signal_ids if source_type == MARKET_SIGNAL_SOURCE else []),
+        "symbols": json.dumps(payload.symbols if source_type == MARKET_SIGNAL_SOURCE else []),
         "enabled": payload.enabled,
         "logic": payload.logic,
-        "exchange": payload.exchange
+        "exchange": payload.exchange,
+        "source_type": source_type,
+        "source_config": json.dumps(source_config),
     })
     db.commit()
     row = result.fetchone()
-    signal_ids = row[2]
-    if isinstance(signal_ids, str):
-        signal_ids = json.loads(signal_ids)
-    symbols = row[3]
-    if isinstance(symbols, str):
-        symbols = json.loads(symbols)
-    return SignalPoolResponse(
-        id=row[0], pool_name=row[1], signal_ids=signal_ids or [],
-        symbols=symbols or [], enabled=row[4], created_at=row[5],
-        logic=row[6] or "OR", exchange=row[7] or "hyperliquid"
-    )
+    response = _build_pool_response(row)
+    _schedule_wallet_runtime_refresh()
+    return response
 
 
 @router.get("/pools/{pool_id}", response_model=SignalPoolResponse)
 def get_pool(pool_id: int, db: Session = Depends(get_db)):
     """Get a signal pool by ID"""
-    import json
     result = db.execute(text("""
-        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange
+        SELECT id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange, source_type, source_config
         FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)
     """), {"id": pool_id})
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Pool not found")
-    signal_ids = row[2]
-    if isinstance(signal_ids, str):
-        signal_ids = json.loads(signal_ids)
-    symbols = row[3]
-    if isinstance(symbols, str):
-        symbols = json.loads(symbols)
-    return SignalPoolResponse(
-        id=row[0], pool_name=row[1], signal_ids=signal_ids or [],
-        symbols=symbols or [], enabled=row[4], created_at=row[5],
-        logic=row[6] or "OR", exchange=row[7] or "hyperliquid"
-    )
+    return _build_pool_response(row)
 
 
 @router.put("/pools/{pool_id}", response_model=SignalPoolResponse)
 def update_pool(pool_id: int, payload: SignalPoolUpdate, db: Session = Depends(get_db)):
     """Update a signal pool"""
-    import json
+    current = db.execute(text("""
+        SELECT exchange, source_type, source_config
+        FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)
+    """), {"id": pool_id}).fetchone()
+    if not current:
+        raise HTTPException(status_code=404, detail="Pool not found")
 
-    # Get current pool exchange if not being updated
-    target_exchange = payload.exchange
-    if target_exchange is None:
-        current = db.execute(text("SELECT exchange FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)"), {"id": pool_id}).fetchone()
-        if current:
-            target_exchange = current[0] or "hyperliquid"
+    target_exchange = payload.exchange if payload.exchange is not None else (current[0] or "hyperliquid")
+    target_source_type = _normalize_source_type(payload.source_type if payload.source_type is not None else current[1])
+    target_source_config = _normalize_source_config(
+        target_source_type,
+        payload.source_config if payload.source_config is not None else current[2],
+    )
 
     # Validate that all signals belong to the same exchange as the pool
     signal_ids_to_check = payload.signal_ids
-    if signal_ids_to_check and target_exchange:
+    if target_source_type == MARKET_SIGNAL_SOURCE and signal_ids_to_check and target_exchange:
         result = db.execute(text("""
             SELECT id, exchange FROM signal_definitions WHERE id = ANY(:ids) AND (is_deleted IS NULL OR is_deleted = false)
         """), {"ids": signal_ids_to_check})
@@ -285,10 +363,10 @@ def update_pool(pool_id: int, payload: SignalPoolUpdate, db: Session = Depends(g
         params["name"] = payload.pool_name
     if payload.signal_ids is not None:
         updates.append("signal_ids = :signal_ids")
-        params["signal_ids"] = json.dumps(payload.signal_ids)
+        params["signal_ids"] = json.dumps(payload.signal_ids if target_source_type == MARKET_SIGNAL_SOURCE else [])
     if payload.symbols is not None:
         updates.append("symbols = :symbols")
-        params["symbols"] = json.dumps(payload.symbols)
+        params["symbols"] = json.dumps(payload.symbols if target_source_type == MARKET_SIGNAL_SOURCE else [])
     if payload.enabled is not None:
         updates.append("enabled = :enabled")
         params["enabled"] = payload.enabled
@@ -298,27 +376,32 @@ def update_pool(pool_id: int, payload: SignalPoolUpdate, db: Session = Depends(g
     if payload.exchange is not None:
         updates.append("exchange = :exchange")
         params["exchange"] = payload.exchange
+    if payload.source_type is not None:
+        updates.append("source_type = :source_type")
+        params["source_type"] = target_source_type
+        if target_source_type == WALLET_TRACKING_SOURCE:
+            if payload.signal_ids is None:
+                updates.append("signal_ids = '[]'")
+            if payload.symbols is None:
+                updates.append("symbols = '[]'")
+    if payload.source_config is not None or payload.source_type is not None:
+        updates.append("source_config = :source_config")
+        params["source_config"] = json.dumps(target_source_config)
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    query = f"UPDATE signal_pools SET {', '.join(updates)} WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false) RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange"
+    query = f"""UPDATE signal_pools SET {', '.join(updates)}
+        WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)
+        RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange, source_type, source_config"""
     result = db.execute(text(query), params)
     db.commit()
     row = result.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Pool not found")
-    signal_ids = row[2]
-    if isinstance(signal_ids, str):
-        signal_ids = json.loads(signal_ids)
-    symbols = row[3]
-    if isinstance(symbols, str):
-        symbols = json.loads(symbols)
-    return SignalPoolResponse(
-        id=row[0], pool_name=row[1], signal_ids=signal_ids or [],
-        symbols=symbols or [], enabled=row[4], created_at=row[5],
-        logic=row[6] or "OR", exchange=row[7] or "hyperliquid"
-    )
+    response = _build_pool_response(row)
+    _schedule_wallet_runtime_refresh()
+    return response
 
 
 @router.delete("/pools/{pool_id}")
@@ -328,6 +411,7 @@ def delete_pool(pool_id: int, db: Session = Depends(get_db)):
     result = delete_signal_pool(db, pool_id)
     if not result.get("success"):
         raise HTTPException(status_code=404, detail=result.get("error", "Pool not found"))
+    _schedule_wallet_runtime_refresh()
     return result
 
 
@@ -441,6 +525,14 @@ def backtest_pool(
     from services.signal_backtest_service import signal_backtest_service
 
     try:
+        pool_meta = db.execute(text("""
+            SELECT source_type FROM signal_pools
+            WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)
+        """), {"id": pool_id}).fetchone()
+        if not pool_meta:
+            raise HTTPException(status_code=404, detail="Pool not found")
+        if (pool_meta[0] or MARKET_SIGNAL_SOURCE) != MARKET_SIGNAL_SOURCE:
+            raise HTTPException(status_code=400, detail="Wallet tracking pools do not support backtest")
         result = signal_backtest_service.backtest_pool(db, pool_id, symbol, kline_min_ts, kline_max_ts)
         return result
     except Exception as e:
@@ -983,16 +1075,18 @@ def create_pool_from_config(
 
         # Create the pool with exchange
         pool_result = db.execute(text("""
-            INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled, logic, exchange)
-            VALUES (:name, :signal_ids, :symbols, :enabled, :logic, :exchange)
-            RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange
+            INSERT INTO signal_pools (pool_name, signal_ids, symbols, enabled, logic, exchange, source_type, source_config)
+            VALUES (:name, :signal_ids, :symbols, :enabled, :logic, :exchange, :source_type, :source_config)
+            RETURNING id, pool_name, signal_ids, symbols, enabled, created_at, logic, exchange, source_type, source_config
         """), {
             "name": request.name,
             "signal_ids": json.dumps(created_signal_ids),
             "symbols": json.dumps([request.symbol]),
             "enabled": True,
             "logic": request.logic,
-            "exchange": request.exchange
+            "exchange": request.exchange,
+            "source_type": MARKET_SIGNAL_SOURCE,
+            "source_config": json.dumps({}),
         })
         pool_row = pool_result.fetchone()
 
@@ -1006,7 +1100,9 @@ def create_pool_from_config(
                 "signal_ids": created_signal_ids,
                 "symbols": [request.symbol],
                 "logic": request.logic,
-                "exchange": request.exchange
+                "exchange": request.exchange,
+                "source_type": MARKET_SIGNAL_SOURCE,
+                "source_config": {},
             },
             "signals": created_signals
         }

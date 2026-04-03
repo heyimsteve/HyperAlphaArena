@@ -31,8 +31,10 @@ Architecture (IMPORTANT - read before modifying any AI streaming code):
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generator, List, Optional
 from datetime import datetime, timedelta
@@ -41,6 +43,17 @@ logger = logging.getLogger(__name__)
 
 # Buffer expiration time (15 minutes)
 BUFFER_EXPIRATION_SECONDS = 15 * 60
+AI_TASK_MAX_WORKERS = int(os.getenv("AI_TASK_MAX_WORKERS", "12"))
+AI_BACKGROUND_MAX_WORKERS = int(os.getenv("AI_BACKGROUND_MAX_WORKERS", "4"))
+
+_ai_task_executor = ThreadPoolExecutor(
+    max_workers=AI_TASK_MAX_WORKERS,
+    thread_name_prefix="ai-task",
+)
+_ai_background_executor = ThreadPoolExecutor(
+    max_workers=AI_BACKGROUND_MAX_WORKERS,
+    thread_name_prefix="ai-bg",
+)
 
 
 @dataclass
@@ -228,7 +241,7 @@ def run_ai_task_in_background(
     generator_func: Callable[[], Generator[str, None, None]],
     on_complete: Optional[Callable[[StreamTask], None]] = None,
     on_error: Optional[Callable[[StreamTask, Exception], None]] = None
-):
+) -> Future:
     """
     Run an AI streaming task in a background thread.
 
@@ -290,6 +303,36 @@ def run_ai_task_in_background(
             if on_error and task:
                 on_error(task, e)
 
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    return thread
+    return _ai_task_executor.submit(run)
+
+
+def submit_ai_background_task(
+    func: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Future:
+    """Run non-stream AI background work with a bounded executor."""
+    return _ai_background_executor.submit(func, *args, **kwargs)
+
+
+def get_ai_runtime_stats() -> Dict[str, int]:
+    """Return bounded AI executor stats for low-frequency health monitoring."""
+    manager = get_buffer_manager()
+
+    with manager._tasks_lock:
+        running_tasks = sum(1 for task in manager._tasks.values() if task.status == "running")
+
+    task_threads = len(getattr(_ai_task_executor, "_threads", ()))
+    background_threads = len(getattr(_ai_background_executor, "_threads", ()))
+    task_queue = getattr(getattr(_ai_task_executor, "_work_queue", None), "qsize", lambda: 0)()
+    background_queue = getattr(getattr(_ai_background_executor, "_work_queue", None), "qsize", lambda: 0)()
+
+    return {
+        "running_tasks": running_tasks,
+        "task_max_workers": AI_TASK_MAX_WORKERS,
+        "task_threads": task_threads,
+        "task_queue": task_queue,
+        "background_max_workers": AI_BACKGROUND_MAX_WORKERS,
+        "background_threads": background_threads,
+        "background_queue": background_queue,
+    }

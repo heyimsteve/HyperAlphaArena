@@ -1369,7 +1369,7 @@ class SignalBacktestService:
         # Get pool definition
         result = db.execute(
             text("""
-                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange
+                SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange, source_type, source_config
                 FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)
             """),
             {"id": pool_id}
@@ -1378,6 +1378,11 @@ class SignalBacktestService:
         if not row:
             logger.warning(f"[Backtest] Pool {pool_id} NOT FOUND in database")
             return {"error": "Pool not found"}
+
+        source_type = row[7] if len(row) > 7 and row[7] else "market_signals"
+        if source_type != "market_signals":
+            logger.warning(f"[Backtest] Pool {pool_id} source_type={source_type} does not support backtest")
+            return {"error": f"Pool source type '{source_type}' does not support backtest"}
 
         exchange = row[6] if len(row) > 6 and row[6] else "hyperliquid"
 

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import logging
+import time
 
 from database.connection import get_db
 from database.models import HyperliquidExchangeAction
@@ -37,6 +38,7 @@ from services.hyperliquid_cache import (
     get_cached_account_state,
     get_cached_positions,
 )
+from utils.runtime_diagnostics import get_current_thread_count, log_hot_path_delta
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +126,7 @@ class HyperliquidSymbolSelectionRequest(BaseModel):
 # API Endpoints
 
 @router.post("/accounts/{account_id}/setup")
-async def setup_account(
+def setup_account(
     account_id: int,
     request: HyperliquidSetupRequest,
     db: Session = Depends(get_db)
@@ -159,7 +161,7 @@ async def setup_account(
 
 
 @router.post("/accounts/{account_id}/switch-environment")
-async def switch_environment(
+def switch_environment(
     account_id: int,
     request: EnvironmentSwitchRequest,
     db: Session = Depends(get_db)
@@ -191,7 +193,7 @@ async def switch_environment(
 
 
 @router.get("/accounts/{account_id}/config")
-async def get_config(
+def get_config(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -215,7 +217,7 @@ async def get_config(
 
 
 @router.get("/accounts/{account_id}/balance")
-async def get_balance(
+def get_balance(
     account_id: int,
     force_refresh: bool = False,
     environment: Optional[str] = None,
@@ -234,6 +236,8 @@ async def get_balance(
         environment: Optional environment override ("testnet" or "mainnet")
                     If not specified, uses global trading mode
     """
+    start_threads = get_current_thread_count()
+    start_time = time.monotonic()
     try:
         # Determine environment to use
         if environment is None:
@@ -262,10 +266,21 @@ async def get_balance(
     except Exception as e:
         logger.error(f"Failed to get balance: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Balance query failed: {str(e)}")
+    finally:
+        log_hot_path_delta(
+            logger,
+            "hyperliquid:balance",
+            "/api/hyperliquid/accounts/{account_id}/balance",
+            start_threads,
+            start_time,
+            account_id=account_id,
+            environment=environment,
+            force_refresh=force_refresh,
+        )
 
 
 @router.get("/accounts/{account_id}/positions")
-async def get_positions(
+def get_positions(
     account_id: int,
     force_refresh: bool = False,
     environment: Optional[str] = None,
@@ -319,7 +334,7 @@ async def get_positions(
 
 
 @router.post("/accounts/{account_id}/orders/manual")
-async def place_manual_order(
+def place_manual_order(
     account_id: int,
     request: ManualOrderRequest,
     db: Session = Depends(get_db)
@@ -384,7 +399,7 @@ async def place_manual_order(
 
 
 @router.post("/accounts/{account_id}/disable")
-async def disable_trading(
+def disable_trading(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -405,7 +420,7 @@ async def disable_trading(
 
 
 @router.post("/accounts/{account_id}/enable")
-async def enable_trading(
+def enable_trading(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -425,7 +440,7 @@ async def enable_trading(
 
 
 @router.get("/accounts/{account_id}/test-connection")
-async def test_connection(
+def test_connection(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -456,7 +471,7 @@ async def test_connection(
 
 
 @router.get("/accounts/{account_id}/snapshots")
-async def get_account_snapshots(
+def get_account_snapshots(
     account_id: int,
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of snapshots to return"),
     db: Session = Depends(get_db)
@@ -523,7 +538,7 @@ async def get_account_snapshots(
 
 
 @router.get("/symbols/available")
-async def list_available_symbols():
+def list_available_symbols():
     """Return cached Hyperliquid tradable symbols (refreshed periodically)."""
     info = get_available_symbols_info()
     return {
@@ -534,7 +549,7 @@ async def list_available_symbols():
 
 
 @router.get("/symbols/watchlist")
-async def get_symbol_watchlist():
+def get_symbol_watchlist():
     """Return the currently configured global Hyperliquid watchlist."""
     symbols = get_selected_symbols()
     return {
@@ -544,7 +559,7 @@ async def get_symbol_watchlist():
 
 
 @router.put("/symbols/watchlist")
-async def update_symbol_watchlist(payload: HyperliquidSymbolSelectionRequest):
+def update_symbol_watchlist(payload: HyperliquidSymbolSelectionRequest):
     """Update global Hyperliquid watchlist (max 10 symbols)."""
     try:
         symbols = update_selected_symbols(payload.symbols)
@@ -561,7 +576,7 @@ async def update_symbol_watchlist(payload: HyperliquidSymbolSelectionRequest):
 
 
 @router.get("/actions/summary")
-async def get_action_summary(
+def get_action_summary(
     window_minutes: int = 1440,
     account_id: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -614,7 +629,7 @@ async def get_action_summary(
 
 
 @router.get("/accounts/{account_id}/rate-limit")
-async def get_account_rate_limit(
+def get_account_rate_limit(
     account_id: int,
     environment: Optional[str] = None,
     db: Session = Depends(get_db)
@@ -678,7 +693,7 @@ async def get_account_rate_limit(
 
 
 @router.get("/accounts/{account_id}/trading-stats")
-async def get_account_trading_stats(
+def get_account_trading_stats(
     account_id: int,
     environment: Optional[str] = None,
     db: Session = Depends(get_db)
@@ -737,7 +752,7 @@ async def get_account_trading_stats(
 
 
 @router.get("/health")
-async def health_check():
+def health_check():
     """
     Hyperliquid service health check
 
@@ -785,7 +800,7 @@ class WalletConfigResponse(BaseModel):
 
 
 @router.get("/accounts/{account_id}/wallet")
-async def get_account_wallet(
+def get_account_wallet(
     account_id: int,
     db: Session = Depends(get_db)
 ):
@@ -867,7 +882,7 @@ async def get_account_wallet(
 
 
 @router.post("/accounts/{account_id}/wallet")
-async def configure_account_wallet(
+def configure_account_wallet(
     account_id: int,
     request: WalletConfigRequest,
     db: Session = Depends(get_db)
@@ -1071,7 +1086,7 @@ async def configure_account_wallet(
 
 
 @router.delete("/accounts/{account_id}/wallet")
-async def delete_account_wallet(
+def delete_account_wallet(
     account_id: int,
     environment: str = Query(..., pattern="^(testnet|mainnet)$", description="Environment to delete (testnet or mainnet)"),
     db: Session = Depends(get_db)
@@ -1135,7 +1150,7 @@ class TestWalletRequest(BaseModel):
 
 
 @router.post("/accounts/{account_id}/wallet/test")
-async def test_wallet_connection(
+def test_wallet_connection(
     account_id: int,
     body: TestWalletRequest = TestWalletRequest(),
     db: Session = Depends(get_db)
@@ -1205,7 +1220,7 @@ class TradingModeRequest(BaseModel):
 
 
 @router.get("/trading-mode")
-async def get_trading_mode(db: Session = Depends(get_db)):
+def get_trading_mode(db: Session = Depends(get_db)):
     """
     Get global Hyperliquid trading mode
 
@@ -1228,7 +1243,7 @@ async def get_trading_mode(db: Session = Depends(get_db)):
 
 
 @router.post("/trading-mode")
-async def set_trading_mode(
+def set_trading_mode(
     request: TradingModeRequest,
     db: Session = Depends(get_db)
 ):
@@ -1295,7 +1310,7 @@ async def set_trading_mode(
 
 
 @router.get("/wallets/all")
-async def get_all_wallets(db: Session = Depends(get_db)):
+def get_all_wallets(db: Session = Depends(get_db)):
     """
     Get all Hyperliquid wallets (both testnet and mainnet) across all AI Trader accounts
 
@@ -1393,7 +1408,7 @@ def _find_agent_in_extra_agents(extra_agents: list, agent_address: str) -> Optio
 
 
 @router.post("/accounts/{account_id}/wallet/upgrade-to-agent")
-async def upgrade_wallet_to_agent(
+def upgrade_wallet_to_agent(
     account_id: int,
     request: AgentWalletUpgradeRequest,
     db: Session = Depends(get_db)
@@ -1494,7 +1509,7 @@ async def upgrade_wallet_to_agent(
 
 
 @router.post("/accounts/{account_id}/wallet/agent")
-async def configure_agent_wallet(
+def configure_agent_wallet(
     account_id: int,
     request: AgentWalletConfigRequest,
     db: Session = Depends(get_db)
@@ -1624,7 +1639,7 @@ async def configure_agent_wallet(
 
 
 @router.get("/accounts/{account_id}/wallet/agent-status")
-async def get_agent_wallet_status(
+def get_agent_wallet_status(
     account_id: int,
     environment: str = Query(..., pattern="^(testnet|mainnet)$"),
     db: Session = Depends(get_db)
@@ -1695,7 +1710,7 @@ async def get_agent_wallet_status(
 
 
 @router.get("/wallet-upgrade-check")
-async def check_wallet_upgrade_needed(db: Session = Depends(get_db)):
+def check_wallet_upgrade_needed(db: Session = Depends(get_db)):
     """
     Check which wallets still use legacy private_key mode and should be upgraded.
     Returns list of wallets that need upgrade (for showing upgrade modal).

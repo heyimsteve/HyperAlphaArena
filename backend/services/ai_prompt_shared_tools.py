@@ -301,7 +301,7 @@ def execute_get_trader_details(db: Session, trader_id: int) -> str:
                 pools_data = []
                 for pool_id in pool_ids:
                     pool_row = db.execute(
-                        text("SELECT id, pool_name, logic, symbols, signal_ids FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)"),
+                        text("SELECT id, pool_name, logic, symbols, signal_ids, source_type, source_config FROM signal_pools WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)"),
                         {"id": pool_id}
                     ).fetchone()
 
@@ -313,10 +313,17 @@ def execute_get_trader_details(db: Session, trader_id: int) -> str:
                         symbols = pool_row[3]
                         if isinstance(symbols, str):
                             symbols = json.loads(symbols)
+                        source_type = pool_row[5] or "market_signals"
+                        source_config = pool_row[6]
+                        if isinstance(source_config, str):
+                            try:
+                                source_config = json.loads(source_config)
+                            except json.JSONDecodeError:
+                                source_config = {}
 
                         # Get signal definitions
                         signals = []
-                        if signal_ids:
+                        if source_type == "market_signals" and signal_ids:
                             for sig_id in signal_ids:
                                 sig_row = db.execute(
                                     text("SELECT signal_name, trigger_condition FROM signal_definitions WHERE id = :id AND (is_deleted IS NULL OR is_deleted = false)"),
@@ -339,6 +346,8 @@ def execute_get_trader_details(db: Session, trader_id: int) -> str:
                             "pool_name": pool_row[1],
                             "logic": pool_row[2] or "OR",
                             "symbols": symbols or [],
+                            "source_type": source_type,
+                            "source_config": source_config if source_type == "wallet_tracking" else {},
                             "signals": signals
                         })
 

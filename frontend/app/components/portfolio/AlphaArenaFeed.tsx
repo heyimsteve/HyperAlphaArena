@@ -2072,6 +2072,9 @@ export default function AlphaArenaFeed({
                                       <div className="font-medium text-muted-foreground mb-1">{t('feed.basicInfo', 'Basic Info')}</div>
                                       <div>{t('feed.environment', 'Environment')}: <span className="font-mono">{inputData.environment || 'N/A'}</span></div>
                                       <div>{t('feed.trigger', 'Trigger')}: <span className="font-mono">{inputData.trigger_symbol || '(scheduled)'}</span> ({inputData.trigger_type})</div>
+                                      {inputData.signal_source_type && (
+                                        <div>{t('feed.source', 'Source')}: <span className="font-mono">{inputData.signal_source_type}</span></div>
+                                      )}
                                       <div>{t('feed.balance', 'Balance')}: <span className="font-mono">${Number(inputData.available_balance || 0).toFixed(2)}</span></div>
                                       <div>{t('feed.equity', 'Equity')}: <span className="font-mono">${Number(inputData.total_equity || 0).toFixed(2)}</span></div>
                                       <div>{t('feed.marginUsed', 'Margin Used')}: <span className="font-mono">{Number(inputData.margin_usage_percent || 0).toFixed(1)}%</span></div>
@@ -2092,7 +2095,9 @@ export default function AlphaArenaFeed({
   signal_pool_name: inputData.signal_pool_name,
   signal_pool_id: inputData.signal_pool_id,
   pool_logic: inputData.pool_logic,
+  signal_source_type: inputData.signal_source_type,
   triggered_signals: inputData.triggered_signals,
+  wallet_event: inputData.wallet_event,
 }, null, 2)}
                                           </pre>
                                         </CollapsibleContent>

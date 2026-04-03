@@ -17,6 +17,8 @@ Supported variables:
 """
 
 import logging
+import threading
+import time
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -29,6 +31,20 @@ from database.models import (
 )
 
 logger = logging.getLogger(__name__)
+INSUFFICIENT_DATA_WARNING_COOLDOWN_SECONDS = 600
+_insufficient_data_lock = threading.Lock()
+_insufficient_data_warning_at: dict[str, float] = {}
+
+
+def _log_insufficient_data_once(key: str, message: str) -> None:
+    now = time.time()
+    with _insufficient_data_lock:
+        last_warning_at = _insufficient_data_warning_at.get(key, 0.0)
+        if now - last_warning_at < INSUFFICIENT_DATA_WARNING_COOLDOWN_SECONDS:
+            logger.debug(message)
+            return
+        _insufficient_data_warning_at[key] = now
+    logger.warning(message)
 
 # Timeframe to milliseconds mapping
 TIMEFRAME_MS = {
@@ -440,7 +456,10 @@ def _get_oi_data(
             oi_changes.append(round(change_usd, 2))
 
     if not oi_changes:
-        logger.warning(f"OI insufficient data: symbol={symbol}, valid_changes=0")
+        _log_insufficient_data_once(
+            f"oi:{exchange.lower()}:{symbol.upper()}:{period}:valid_changes",
+            f"OI insufficient data: symbol={symbol}, valid_changes=0",
+        )
         return None
 
     return {
@@ -474,7 +493,8 @@ def _get_oi_delta_data(
 
     if not records:
         from datetime import datetime
-        logger.warning(
+        _log_insufficient_data_once(
+            f"oi_delta:{exchange.lower()}:{symbol.upper()}:{period}:records",
             f"OI_DELTA insufficient data: symbol={symbol}, period={period}, "
             f"query_range=[{datetime.utcfromtimestamp(start_time/1000)} - "
             f"{datetime.utcfromtimestamp(current_time_ms/1000)}], records_found=0"
@@ -489,8 +509,8 @@ def _get_oi_delta_data(
 
     sorted_times = sorted(buckets.keys())
     if len(sorted_times) < 2:
-        from datetime import datetime
-        logger.warning(
+        _log_insufficient_data_once(
+            f"oi_delta:{exchange.lower()}:{symbol.upper()}:{period}:buckets",
             f"OI_DELTA insufficient data: symbol={symbol}, period={period}, "
             f"records_found={len(records)}, buckets={len(sorted_times)}, need_min=2"
         )
@@ -505,8 +525,8 @@ def _get_oi_delta_data(
             oi_changes.append(change_pct)
 
     if not oi_changes:
-        from datetime import datetime
-        logger.warning(
+        _log_insufficient_data_once(
+            f"oi_delta:{exchange.lower()}:{symbol.upper()}:{period}:valid_changes",
             f"OI_DELTA insufficient data: symbol={symbol}, period={period}, "
             f"records_found={len(records)}, buckets={len(sorted_times)}, valid_changes=0"
         )

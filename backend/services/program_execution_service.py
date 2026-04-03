@@ -150,9 +150,21 @@ class ProgramExecutionService:
                 return
 
             logger.info(f"[ProgramExecution] Found {len(bindings)} bindings for pool_id={pool_id}")
-
+            raw_trigger_type = pool.get("trigger_type", "signal")
+            # Program Trader keeps a stable top-level trigger taxonomy: signal vs scheduled.
+            # Wallet tracking is a signal-source subtype and should flow through wallet_event
+            # / signal_source_type instead of becoming a third top-level trigger type.
+            trigger_type = "signal" if raw_trigger_type == "wallet_signal" else raw_trigger_type
             for binding in bindings:
-                self._execute_binding(db, binding, symbol, pool, market_data_snapshot, triggered_signals)
+                self._execute_binding(
+                    db,
+                    binding,
+                    symbol,
+                    pool,
+                    market_data_snapshot,
+                    triggered_signals,
+                    trigger_type=trigger_type,
+                )
 
         except Exception as e:
             logger.error(f"[ProgramExecution] Error processing signal: {e}")
@@ -378,6 +390,7 @@ class ProgramExecutionService:
                 market_data_snapshot=market_data_snapshot,
                 triggered_signals=triggered_signals,
                 trigger_type=trigger_type,
+                signal_source_type="wallet_tracking" if isinstance(pool.get("wallet_event"), dict) else None,
                 environment=environment or "mainnet",
                 max_leverage=max_leverage,
                 default_leverage=default_leverage,
@@ -505,6 +518,7 @@ class ProgramExecutionService:
         market_data_snapshot: dict,
         triggered_signals: list,
         trigger_type: str = "signal",
+        signal_source_type: Optional[str] = None,
         environment: str = "mainnet",
         max_leverage: int = 10,
         default_leverage: int = 3,
@@ -521,10 +535,13 @@ class ProgramExecutionService:
         # Extract trigger context from pool (matches AI Trader's {trigger_context})
         signal_pool_name = pool.get("pool_name", "") or ""
         pool_logic = pool.get("logic", "OR") or "OR"
+        wallet_event = pool.get("wallet_event") if signal_source_type == "wallet_tracking" else None
 
         # Build trigger market regime snapshot if this is a signal trigger
         trigger_market_regime = None
-        if trigger_type == "signal" and symbol:
+        # Wallet-origin signals are still signals, but they do not have local market
+        # indicator context. Only market-native signals should populate regime snapshots.
+        if trigger_type == "signal" and signal_source_type != "wallet_tracking" and symbol:
             # Get market regime at trigger time (same timeframe as first signal if available)
             timeframe = "5m"  # Default
             if triggered_signals:
@@ -550,6 +567,8 @@ class ProgramExecutionService:
             signal_pool_name=signal_pool_name,
             pool_logic=pool_logic,
             triggered_signals=triggered_signals or [],
+            signal_source_type=signal_source_type,
+            wallet_event=wallet_event if isinstance(wallet_event, dict) else None,
             # Trigger market regime snapshot
             trigger_market_regime=trigger_market_regime,
             # Environment info
@@ -614,6 +633,8 @@ class ProgramExecutionService:
                     "signal_pool_name": pool.get("pool_name"),
                     "pool_logic": market_data.pool_logic if market_data else "OR",
                     "triggered_signals": market_data.triggered_signals if market_data else [],
+                    "signal_source_type": market_data.signal_source_type if market_data else None,
+                    "wallet_event": market_data.wallet_event if market_data else None,
                     "trigger_market_regime": {
                         "regime": market_data.trigger_market_regime.regime,
                         "conf": market_data.trigger_market_regime.conf,

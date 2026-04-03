@@ -60,6 +60,10 @@ Hyper Alpha Arena is a production-ready AI trading platform where Large Language
 
 **Program Trader** - Define trading rules with Python code. Backtest strategies on historical data to validate profitability before going live. AI assistant helps write and optimize code through conversation.
 
+### Smart Wallet Signal Integration
+
+Connect [Hyper Insight](https://hyper.akooi.com/) to bring tracked whale and smart-money activity into Hyper Alpha Arena as wallet signal pools. Hyper Insight currently indexes about **70,000** tracked addresses and can sync wallet actions into Hyper Alpha Arena for **AI Trader**, **Program Trader**, and bot notifications.
+
 ### AI Agent Architecture
 
 What sets Hyper Alpha Arena apart is its multi-agent AI system. Instead of a single chatbot, five specialized AI agents collaborate to cover the full trading workflow:

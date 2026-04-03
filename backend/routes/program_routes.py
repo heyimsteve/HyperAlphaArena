@@ -139,6 +139,7 @@ class SignalPoolInfo(BaseModel):
     symbols: List[str]
     enabled: bool
     exchange: str = "hyperliquid"
+    source_type: Optional[str] = "market_signals"
 
 
 class AccountInfo(BaseModel):
@@ -402,6 +403,12 @@ def _get_available_apis() -> Dict[str, Any]:
         "MarketData_properties": {
             "data.trigger_symbol": "Symbol that triggered this evaluation",
             "data.trigger_type": "Trigger type: 'signal' or 'scheduled'",
+            "data.signal_source_type": "Optional signal source subtype: 'wallet_tracking' for Hyper Insight wallet signals, None for market signals",
+            "data.wallet_event": "Optional wallet signal payload (dict). Present when signal_source_type='wallet_tracking'. Structure: {source, source_type, address, event_type, event_level, tier, summary, detail, event_timestamp}",
+            "data.wallet_event.detail (realtime position_change)": "{action, direction, fills_count, start_position, end_position, total_size, notional_value, average_price, closed_pnl, fills[]}",
+            "data.wallet_event.detail (polling position_change)": "{action, old_value, new_value, previous_size, current_size, absolute_change, relative_change}",
+            "data.wallet_event.detail.action": "open, close, add, reduce, flip, update",
+            "data.wallet_event.detail.direction": "long, short, flat (realtime only)",
             "data.available_balance": "Available balance in USD",
             "data.total_equity": "Total account equity",
             "data.positions": "Dict[str, Position] of current open positions",
@@ -626,7 +633,10 @@ def get_program_dev_guide(lang: str = "en") -> dict:
 @router.get("/signal-pools/", response_model=List[SignalPoolInfo])
 def list_signal_pools(db: Session = Depends(get_db)):
     """List available signal pools."""
-    pools = db.query(SignalPool).filter(SignalPool.enabled == True, SignalPool.is_deleted != True).all()
+    pools = db.query(SignalPool).filter(
+        SignalPool.enabled == True,
+        SignalPool.is_deleted != True,
+    ).all()
     result = []
     for pool in pools:
         symbols = pool.symbols
@@ -641,6 +651,7 @@ def list_signal_pools(db: Session = Depends(get_db)):
             symbols=symbols or [],
             enabled=pool.enabled,
             exchange=pool.exchange or "hyperliquid",
+            source_type=pool.source_type or "market_signals",
         ))
     return result
 

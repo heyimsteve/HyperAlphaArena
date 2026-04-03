@@ -189,6 +189,8 @@ class MarketData:
     signal_pool_name: str = ""  # Name of the signal pool that triggered
     pool_logic: str = "OR"  # "OR" or "AND" - how signals are combined
     triggered_signals: List[Dict] = field(default_factory=list)  # Full signal details
+    signal_source_type: Optional[str] = None  # e.g. "wallet_tracking" for external wallet signals
+    wallet_event: Optional[Dict[str, Any]] = None  # Hyper Insight wallet trigger payload
 
     # Trigger market regime snapshot - matches AI Trader's {trigger_market_regime}
     trigger_market_regime: Optional[RegimeInfo] = None  # Market regime at trigger time

@@ -57,7 +57,7 @@ class OrderProcessingResult(BaseModel):
 
 
 @router.post("/create", response_model=OrderOut)
-async def create_new_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
+def create_new_order(request: OrderCreateRequest, db: Session = Depends(get_db)):
     """
     Create a new order
     
@@ -139,7 +139,7 @@ async def create_new_order(request: OrderCreateRequest, db: Session = Depends(ge
 
 
 @router.get("/pending", response_model=List[OrderOut])
-async def get_user_pending_orders(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_user_pending_orders(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """
     Get pending orders
     
@@ -159,7 +159,7 @@ async def get_user_pending_orders(user_id: Optional[int] = None, db: Session = D
 
 
 @router.get("/user/{user_id}", response_model=List[OrderOut])
-async def get_user_orders(user_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
+def get_user_orders(user_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
     """
     Get all orders for a user
     
@@ -186,7 +186,7 @@ async def get_user_orders(user_id: int, status: Optional[str] = None, db: Sessio
 
 
 @router.post("/execute/{order_id}", response_model=OrderExecutionResult)
-async def execute_order_manually(order_id: int, db: Session = Depends(get_db)):
+def execute_order_manually(order_id: int, db: Session = Depends(get_db)):
     """
     Manually execute a specific order (check execution conditions)
     
@@ -231,7 +231,7 @@ async def execute_order_manually(order_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/cancel/{order_id}")
-async def cancel_user_order(order_id: int, reason: str = "User cancelled", db: Session = Depends(get_db)):
+def cancel_user_order(order_id: int, reason: str = "User cancelled", db: Session = Depends(get_db)):
     """
     Cancel an order
     
@@ -266,7 +266,7 @@ async def cancel_user_order(order_id: int, reason: str = "User cancelled", db: S
 
 
 @router.post("/process-all", response_model=OrderProcessingResult)
-async def process_all_orders(db: Session = Depends(get_db)):
+def process_all_orders(db: Session = Depends(get_db)):
     """
     Process all pending orders
     
@@ -291,7 +291,7 @@ async def process_all_orders(db: Session = Depends(get_db)):
 
 
 @router.get("/order/{order_id}", response_model=OrderOut)
-async def get_order_details(order_id: int, db: Session = Depends(get_db)):
+def get_order_details(order_id: int, db: Session = Depends(get_db)):
     """
     Get order details
     
@@ -317,7 +317,7 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/health")
-async def orders_health_check(db: Session = Depends(get_db)):
+def orders_health_check(db: Session = Depends(get_db)):
     """
     Order service health check
     

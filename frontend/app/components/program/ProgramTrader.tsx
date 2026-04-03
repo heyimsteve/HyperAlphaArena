@@ -72,6 +72,7 @@ interface SignalPool {
   symbols: string[]
   enabled: boolean
   exchange: string
+  source_type?: string | null
 }
 
 interface AITrader {
@@ -246,7 +247,7 @@ export default function ProgramTrader() {
       const res = await fetch(`${API_BASE}signal-pools/`)
       if (res.ok) {
         const data = await res.json()
-        setSignalPools(data)
+        setSignalPools((data || []).filter((pool: SignalPool) => pool.enabled))
       }
     } catch (err) {
       console.error('Failed to fetch signal pools:', err)
@@ -468,6 +469,9 @@ export default function ProgramTrader() {
         : [...prev, poolId]
     )
   }
+
+  const usesWalletPool = (poolIds: number[]) =>
+    poolIds.some((id) => (signalPools.find((pool) => pool.id === id)?.source_type || 'market_signals') === 'wallet_tracking')
 
   const validateCode = async (code: string) => {
     setValidating(true)
@@ -923,7 +927,15 @@ export default function ProgramTrader() {
                         <Play className="h-3 w-3 mr-1" />
                         {t('programTrader.preview', 'Preview')}
                       </Button>
-                      <Button size="sm" variant="outline" onClick={() => { setBacktestBinding(b); setBacktestOpen(true) }}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={usesWalletPool(b.signal_pool_ids || [])}
+                        title={usesWalletPool(b.signal_pool_ids || [])
+                          ? t('programTrader.walletBacktestUnavailable', 'Wallet signal bindings use external real-time events and are not available for backtest.')
+                          : undefined}
+                        onClick={() => { setBacktestBinding(b); setBacktestOpen(true) }}
+                      >
                         <LineChart className="h-3 w-3 mr-1" />
                         {t('programTrader.backtest', 'Backtest')}
                       </Button>
@@ -1017,6 +1029,7 @@ export default function ProgramTrader() {
                     const poolExchange = pool.exchange || 'hyperliquid'
                     const isMatchingExchange = poolExchange === bindingExchange
                     const isDisabled = !isMatchingExchange
+                    const isWalletPool = (pool.source_type || 'market_signals') === 'wallet_tracking'
                     return (
                       <button
                         key={pool.id}
@@ -1034,6 +1047,11 @@ export default function ProgramTrader() {
                         }`}>
                           {poolExchange === 'hyperliquid' ? 'HL' : 'BN'}
                         </span>
+                        {isWalletPool && (
+                          <span className="px-1 py-0.5 rounded text-[9px] font-medium bg-blue-500/15 text-blue-500">
+                            {t('programTrader.walletBadge', 'Wallet')}
+                          </span>
+                        )}
                         {pool.pool_name}
                       </button>
                     )

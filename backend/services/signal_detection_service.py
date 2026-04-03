@@ -199,6 +199,8 @@ class SignalDetectionService:
                         "symbol": symbol,
                         "triggered_signals": triggered_signals,
                     }
+                    if pool_trigger.get("trigger_type") == "wallet_signal":
+                        event_data["wallet_event"] = pool_trigger.get("wallet_event")
                     results = enqueue_system_event(db, "signal_triggered", event_data)
                     if results:
                         try:
@@ -239,7 +241,13 @@ class SignalDetectionService:
             try:
                 # Load enabled signal pools
                 result = db.execute(
-                    text("SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange FROM signal_pools WHERE enabled = true AND (is_deleted IS NULL OR is_deleted = false)")
+                    text("""
+                        SELECT id, pool_name, signal_ids, symbols, enabled, logic, exchange, source_type
+                        FROM signal_pools
+                        WHERE enabled = true
+                          AND (is_deleted IS NULL OR is_deleted = false)
+                          AND COALESCE(source_type, 'market_signals') = 'market_signals'
+                    """)
                 )
                 self._signal_pools_cache = []
                 for row in result.fetchall():
@@ -263,7 +271,8 @@ class SignalDetectionService:
                         "symbols": symbols or [],
                         "enabled": row[4],
                         "logic": row[5] or "OR",
-                        "exchange": row[6] or "hyperliquid"
+                        "exchange": row[6] or "hyperliquid",
+                        "source_type": row[7] or "market_signals",
                     })
 
                 # Load all enabled signals

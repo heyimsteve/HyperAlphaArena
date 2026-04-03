@@ -1052,6 +1052,8 @@ class SignalPool(Base):
     logic = Column(String(10), nullable=True, default="OR")  # AND/OR logic
     enabled = Column(Boolean, nullable=True, default=True)
     exchange = Column(String(20), nullable=False, default="hyperliquid")
+    source_type = Column(String(30), nullable=False, default="market_signals")
+    source_config = Column(Text, nullable=False, default="{}")  # wallet_tracking-only JSON config
 
     # Soft delete
     is_deleted = Column(Boolean, nullable=False, server_default=text('false'))

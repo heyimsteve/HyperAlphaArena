@@ -115,9 +115,12 @@ class MarketFlowCollector:
 
         # Timing
         self.last_flush_time = time.time()
-        self.flush_timer: Optional[threading.Timer] = None
-        self.health_check_timer: Optional[threading.Timer] = None
-        self.flush_generation = 0  # Incremented on reconnect to stop orphan timer chains
+        self.flush_thread: Optional[threading.Thread] = None
+        self.health_thread: Optional[threading.Thread] = None
+        self.flush_wakeup = threading.Event()
+        self.health_wakeup = threading.Event()
+        self.flush_in_progress = threading.Lock()
+        self.active_flush_started_at: Optional[float] = None
 
         # Reconnection state
         self.reconnect_attempts = 0
@@ -127,7 +130,7 @@ class MarketFlowCollector:
         # Degraded mode state (infinite retry when normal retries exhausted)
         self.degraded_mode = False
         self.degraded_retry_count = 0
-        self.degraded_retry_timer: Optional[threading.Timer] = None
+        self.next_degraded_retry_at: Optional[float] = None
 
         # Thread safety
         self.buffer_lock = threading.Lock()
@@ -177,8 +180,7 @@ class MarketFlowCollector:
             for symbol in symbols:
                 self._subscribe_symbol(symbol)
 
-            self._schedule_flush(align_to_boundary=True)
-            self._schedule_health_check()
+            self._ensure_worker_threads()
 
             logger.info(f"MarketFlowCollector started with symbols: {symbols}")
 
@@ -208,25 +210,21 @@ class MarketFlowCollector:
             return
 
         self.running = False
+        self.flush_wakeup.set()
+        self.health_wakeup.set()
 
-        # Cancel flush timer
-        if self.flush_timer:
-            self.flush_timer.cancel()
-            self.flush_timer = None
+        if self.flush_thread and self.flush_thread.is_alive():
+            self.flush_thread.join(timeout=5)
+        self.flush_thread = None
 
-        # Cancel health check timer
-        if self.health_check_timer:
-            self.health_check_timer.cancel()
-            self.health_check_timer = None
-
-        # Cancel degraded mode retry timer
-        if self.degraded_retry_timer:
-            self.degraded_retry_timer.cancel()
-            self.degraded_retry_timer = None
+        if self.health_thread and self.health_thread.is_alive():
+            self.health_thread.join(timeout=5)
+        self.health_thread = None
 
         # Reset degraded mode state
         self.degraded_mode = False
         self.degraded_retry_count = 0
+        self.next_degraded_retry_at = None
 
         # Flush remaining data
         self._flush_to_database()
@@ -236,13 +234,7 @@ class MarketFlowCollector:
             self._unsubscribe_symbol(symbol)
 
         # Disconnect WebSocket
-        if self.info and self.info.ws_manager:
-            try:
-                self.info.disconnect_websocket()
-            except Exception as e:
-                logger.warning(f"Error disconnecting websocket: {e}")
-
-        self.info = None
+        self._cleanup_old_connection()
         logger.info("MarketFlowCollector stopped")
 
     def refresh_subscriptions(self, new_symbols: List[str]):
@@ -440,22 +432,54 @@ class MarketFlowCollector:
         except Exception as e:
             logger.error(f"Error processing asset ctx for {symbol}: {e}")
 
-    def _schedule_health_check(self):
-        """Schedule next health check"""
-        if not self.running:
-            return
-        self.health_check_timer = threading.Timer(
-            HEALTH_CHECK_INTERVAL_SECONDS, self._health_check_and_reschedule
-        )
-        self.health_check_timer.daemon = True
-        self.health_check_timer.start()
+    def _ensure_worker_threads(self):
+        """Ensure flush/health workers exist exactly once."""
+        if not self.flush_thread or not self.flush_thread.is_alive():
+            self.flush_wakeup.clear()
+            self.flush_thread = threading.Thread(
+                target=self._flush_worker_loop,
+                daemon=True,
+                name="market-flow-flush",
+            )
+            self.flush_thread.start()
+            logger.info("[Collector] Flush worker started")
 
-    def _health_check_and_reschedule(self):
-        """Check connection health and schedule next check"""
-        if not self.running:
-            return
-        self._check_connection_health()
-        self._schedule_health_check()
+        if not self.health_thread or not self.health_thread.is_alive():
+            self.health_wakeup.clear()
+            self.health_thread = threading.Thread(
+                target=self._health_worker_loop,
+                daemon=True,
+                name="market-flow-health",
+            )
+            self.health_thread.start()
+            logger.info("[Collector] Health worker started")
+
+    def _flush_worker_loop(self):
+        """Persist data on 15-second boundaries using a single worker thread."""
+        while self.running:
+            now = time.time()
+            next_boundary = (int(now) // AGGREGATION_WINDOW_SECONDS + 1) * AGGREGATION_WINDOW_SECONDS
+            delay = max(0.1, next_boundary - now)
+            if self.flush_wakeup.wait(delay):
+                self.flush_wakeup.clear()
+                continue
+            self._flush_once()
+
+    def _health_worker_loop(self):
+        """Monitor connection health and degraded-mode retries using a single worker thread."""
+        while self.running:
+            wait_seconds = HEALTH_CHECK_INTERVAL_SECONDS
+            if self.degraded_mode and self.next_degraded_retry_at:
+                wait_seconds = max(1.0, min(wait_seconds, self.next_degraded_retry_at - time.time()))
+            if self.health_wakeup.wait(wait_seconds):
+                self.health_wakeup.clear()
+                continue
+            if not self.running:
+                break
+            if self.degraded_mode and self.next_degraded_retry_at and time.time() >= self.next_degraded_retry_at:
+                self._reconnect()
+            else:
+                self._check_connection_health()
 
     def _check_connection_health(self):
         """Check if WebSocket data is stale and trigger reconnect if needed"""
@@ -463,9 +487,7 @@ class MarketFlowCollector:
             logger.debug("Health check skipped - reconnection in progress")
             return
 
-        # In degraded mode, reconnection is handled by degraded_retry_timer
         if self.degraded_mode:
-            logger.debug("Health check skipped - in degraded mode (timer-controlled retry)")
             return
 
         now = time.time()
@@ -513,6 +535,7 @@ class MarketFlowCollector:
                     )
 
                 self.degraded_retry_count += 1
+                self.next_degraded_retry_at = time.time() + DEGRADED_MODE_RETRY_INTERVAL_SECONDS
                 # Log every DEGRADED_MODE_LOG_INTERVAL attempts
                 if self.degraded_retry_count % DEGRADED_MODE_LOG_INTERVAL == 1:
                     logger.warning(
@@ -551,102 +574,80 @@ class MarketFlowCollector:
             self.reconnect_attempts = 0
             self.degraded_mode = False
             self.degraded_retry_count = 0
+            self.next_degraded_retry_at = None
             now = time.time()
             self.last_update_time["l2book"] = now
             self.last_update_time["asset_ctx"] = now
             self.last_update_time["trades"] = now
 
-            # Increment generation to stop any orphan timer chains, then start fresh
-            self.flush_generation += 1
-            if self.flush_timer:
-                self.flush_timer.cancel()
-            self._schedule_flush(align_to_boundary=True)
+            self.flush_wakeup.set()
+            self.health_wakeup.set()
 
             logger.warning(
                 f"[Reconnect] SUCCESS! Resubscribed to {len(symbols_to_restore)} symbols. "
-                f"Data collection resumed. Flush timer re-aligned to boundary."
+                f"Data collection resumed."
             )
 
         except Exception as e:
             logger.error(f"Reconnect failed: {e}", exc_info=True)
             # Ensure info is None on failure to avoid using corrupted object
             self.info = None
-            # Schedule next retry in degraded mode
-            if self.degraded_mode:
-                self._schedule_degraded_retry()
+            if self.degraded_mode and self.next_degraded_retry_at is None:
+                self.next_degraded_retry_at = time.time() + DEGRADED_MODE_RETRY_INTERVAL_SECONDS
         finally:
             self.is_reconnecting = False
 
     def _cleanup_old_connection(self):
         """Clean up old WebSocket connection and subscription state"""
         if self.info and self.info.ws_manager:
+            ws_manager = self.info.ws_manager
             try:
                 self.info.disconnect_websocket()
                 logger.info("[Reconnect] Old WebSocket disconnected")
             except Exception as e:
                 logger.warning(f"[Reconnect] Error disconnecting old websocket: {e}")
+            try:
+                ws_manager.join(timeout=5)
+                if ws_manager.is_alive():
+                    logger.warning(
+                        "[Reconnect] Old WebSocket manager did not exit cleanly; "
+                        "threads=%s symbols=%s",
+                        len(threading.enumerate()),
+                        list(self.subscribed_symbols),
+                    )
+            except Exception as e:
+                logger.warning(f"[Reconnect] Error joining old websocket manager: {e}")
         self.info = None
         self.subscribed_symbols = []
         self.subscription_ids.clear()
 
-    def _schedule_degraded_retry(self):
-        """Schedule next reconnection attempt in degraded mode"""
-        if not self.running:
-            return
-        self.degraded_retry_timer = threading.Timer(
-            DEGRADED_MODE_RETRY_INTERVAL_SECONDS,
-            self._reconnect
-        )
-        self.degraded_retry_timer.daemon = True
-        self.degraded_retry_timer.start()
-        logger.debug(
-            f"[Reconnect] Degraded mode retry scheduled in "
-            f"{DEGRADED_MODE_RETRY_INTERVAL_SECONDS}s"
-        )
-
-    def _schedule_flush(self, align_to_boundary: bool = False):
-        """
-        Schedule next flush.
-
-        Why align_to_boundary matters:
-        - Real-time detection and backtest must use the same time boundaries
-        - Backtest check_points are aligned to 15-second boundaries (00, 15, 30, 45)
-        - If flush executes at non-aligned times (e.g., 13:52:28.234 instead of 13:52:30),
-          the indicator values may differ slightly due to different data windows
-        - This causes OR-logic signal pools to trigger differently in real-time vs backtest
-        - By aligning flush to boundaries, real-time detection matches backtest exactly
-
-        Args:
-            align_to_boundary: If True, wait until next 15-second boundary before first flush.
-                              Used on startup to sync with backtest check_points.
-        """
-        if not self.running:
+    def _flush_once(self):
+        """Run at most one flush at a time and emit diagnostics for abnormal delays."""
+        if not self.flush_in_progress.acquire(blocking=False):
+            if self.active_flush_started_at:
+                logger.warning(
+                    "[Flush] Previous flush still running; skipping this window. "
+                    "duration=%.2fs threads=%s symbols=%s",
+                    time.time() - self.active_flush_started_at,
+                    len(threading.enumerate()),
+                    list(self.subscribed_symbols),
+                )
             return
 
-        delay = AGGREGATION_WINDOW_SECONDS
-        if align_to_boundary:
-            # Calculate delay to next 15-second boundary
-            now = time.time()
-            current_boundary = int(now) // AGGREGATION_WINDOW_SECONDS * AGGREGATION_WINDOW_SECONDS
-            next_boundary = current_boundary + AGGREGATION_WINDOW_SECONDS
-            delay = next_boundary - now
-            logger.info(f"[Flush] Aligning to boundary, waiting {delay:.2f}s until next flush")
-
-        gen = self.flush_generation
-        self.flush_timer = threading.Timer(delay, self._flush_and_reschedule, args=(gen,))
-        self.flush_timer.daemon = True
-        self.flush_timer.start()
-
-    def _flush_and_reschedule(self, generation: int = 0):
-        """Flush data and schedule next flush"""
-        if not self.running:
-            return
-        # Stop orphan timer chains from previous reconnects
-        if generation != self.flush_generation:
-            return
-        self._flush_to_database()
-        # Always re-align to boundary to prevent cumulative drift
-        self._schedule_flush(align_to_boundary=True)
+        self.active_flush_started_at = time.time()
+        try:
+            self._flush_to_database()
+            duration = time.time() - self.active_flush_started_at
+            if duration > AGGREGATION_WINDOW_SECONDS:
+                logger.warning(
+                    "[Flush] Slow flush detected: duration=%.2fs threads=%s symbols=%s",
+                    duration,
+                    len(threading.enumerate()),
+                    list(self.subscribed_symbols),
+                )
+        finally:
+            self.active_flush_started_at = None
+            self.flush_in_progress.release()
 
     def _flush_to_database(self):
         """Flush all buffered data to database"""

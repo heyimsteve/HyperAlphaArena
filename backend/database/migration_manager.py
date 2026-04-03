@@ -57,6 +57,7 @@ MIGRATIONS = [
     "create_market_sentiment_metrics_table.py",
     "create_hyperliquid_backfill_tasks.py",
     "add_exchange_to_signals.py",
+    "add_source_fields_to_signal_pools.py",
     "add_binance_wallet_tables.py",
     "add_exchange_to_trigger_configs.py",
     "add_exchange_to_decision_logs.py",

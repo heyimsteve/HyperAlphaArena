@@ -27,6 +27,34 @@ triggered_signals:
     current_value: 3.5
 ```
 
+When triggered by **wallet signal** (Hyper Insight wallet tracking):
+```
+=== TRIGGER CONTEXT ===
+trigger_type: wallet_signal
+signal_pool_name: BTC Whale Tracker
+trigger_symbol: ETH
+address: 0x84d5c9e6a6944356a01ffc9728610227bd1a670e
+event_type: position_change
+event_level: significant
+summary: Real-time: opened ETH $50,000
+action: open
+direction: long
+notional_value: 50000.0
+closed_pnl: 0.0
+average_price: 2500.5
+start_position: 0.0
+end_position: 20.0
+fills_count: 5
+```
+
+Wallet signal fields:
+- `event_type`: position_change, equity_change, funding, transfer, liquidation
+- `event_level`: normal, significant, critical
+- `tier` (in summary prefix): "Real-time" (paid WS fills) or "Polling" (snapshot diff)
+- `action`: open, close, add, reduce, flip, update (position_change only)
+- `direction`: long, short, flat (position_change only)
+- Polling events use `old_value`/`new_value` instead of fills-based fields
+
 When triggered by **scheduled interval**:
 ```
 === TRIGGER CONTEXT ===

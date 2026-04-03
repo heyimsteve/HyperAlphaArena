@@ -34,6 +34,8 @@ interface SignalPool {
   symbols: string[]
   enabled: boolean
   logic?: string
+  exchange?: string
+  source_type?: string | null
 }
 
 interface GlobalSamplingConfig {

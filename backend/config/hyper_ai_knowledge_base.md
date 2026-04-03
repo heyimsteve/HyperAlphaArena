@@ -133,3 +133,100 @@ Yes. Common setups:
 - Different traders for different symbols
 - Different traders for different strategies
 - Same signal pool, different strategies (conservative vs aggressive)
+
+### Q: How do I connect Hyper Insight wallet signals?
+Hyper Insight wallet signals are configured in two places:
+
+1. Track wallets on `https://hyper.akooi.com/`
+2. Open Hyper Alpha Arena → `Signals` → `Wallet Tracking`
+3. Enable the Hyper Insight connection
+4. Create a wallet-tracking signal pool from the synced wallet list
+
+Suggested user-facing guidance:
+- Explain Hyper Insight as the wallet intelligence site where users track wallets and review wallet behavior
+- Explain Hyper Alpha Arena as the place where those tracked wallet signals are connected and used
+- Prefer product paths and links over internal implementation details
+- Do not mention internal tool names, API names, or tokens in user replies
+
+Important rules:
+- Hyper Insight is the source of truth for tracked wallets
+- Hyper Alpha Arena consumes synced wallets but does not edit them locally
+- New synced wallets do not automatically enter an existing pool
+- Wallet-tracking pools do not support backtest in Phase 5
+
+### Q: Can Hyper AI tell me which wallets are currently tracked?
+Yes.
+
+Recommended usage:
+- First confirm `Hyper Alpha Arena -> Signals -> Wallet Tracking` is connected
+- Then read the exact wallet list currently synced into this Hyper Alpha Arena session
+- Then choose one of those wallets for deeper analysis if needed
+
+### Q: Can Hyper AI analyze a tracked wallet for me?
+Yes, if the wallet is already tracked in Hyper Insight and Wallet Tracking sync is connected in Hyper Alpha Arena.
+
+Important limitation:
+- Hyper AI can read detailed address data and recent fills
+- Recent fills are only a recent activity window, not the wallet's complete all-time trade history
+- Hyper AI should treat style conclusions as analysis based on available data, not as guaranteed full-history facts
+
+If analysis is unavailable:
+- First check `Hyper Alpha Arena -> Signals -> Wallet Tracking` and confirm sync is connected
+- Then confirm the wallet already appears in the synced wallet list
+- If sync is connected and the wallet is already visible in the synced list but analysis still fails, explain that the problem is system-side rather than a tracking issue
+
+### Q: What data does a wallet signal event contain?
+Wallet signals arrive as `wallet_event` inside trigger_context (AI Trader) or input_data (Program Trader).
+
+Common envelope fields (all event types):
+- `address`: wallet address (lowercase)
+- `event_type`: position_change, equity_change, funding, transfer, liquidation
+- `event_level`: normal, significant, critical
+- `tier`: "realtime" (paid WS fills) or "polling" (snapshot diff)
+- `summary`: human-readable description (e.g. "Real-time: opened ETH $50,000")
+- `event_timestamp`: UTC milliseconds
+
+Realtime position_change detail (from aggregated fills):
+- `action`: open, close, add, reduce, flip, update
+- `direction`: long, short, flat
+- `start_position`: position size before fills
+- `end_position`: position size after fills
+- `total_size`: sum of absolute fill sizes
+- `notional_value`: total notional in USD
+- `average_price`: volume-weighted average fill price
+- `closed_pnl`: realized PnL from this batch (null if none)
+- `fills_count`: number of fills aggregated
+- `fills`: array of raw fill objects with coin, px, sz, dir, side, time, closedPnl
+
+Polling position_change detail (from snapshot comparison):
+- `action`: open, close, add, reduce, flip
+- `old_value`: previous position notional value
+- `new_value`: current position notional value
+- `previous_size`: previous position size (signed)
+- `current_size`: current position size (signed)
+- `absolute_change`: |new_value - old_value|
+- `relative_change`: absolute_change / |old_value|
+
+Polling equity_change detail:
+- `old_equity`: previous total equity
+- `new_equity`: current total equity
+- `absolute_change`: |new_equity - old_equity|
+- `relative_change`: absolute_change / |old_equity|
+
+Key differences between realtime and polling:
+- Realtime has full fill details (prices, sizes, PnL per fill)
+- Polling only has before/after snapshots (no individual fill data)
+- Realtime events have tier="realtime", polling events have tier="polling"
+- The summary prefix indicates the source: "Real-time:" vs "Polling:"
+
+### Q: How should a copy-trading strategy use wallet signals?
+When writing a strategy that follows wallet signals:
+- Check `event_type == "position_change"` to filter for trading actions
+- Use `detail.action` to determine what the tracked wallet did (open/close/add/reduce/flip)
+- Use `detail.direction` to know the wallet's position direction after the action
+- Use `detail.notional_value` to gauge the trade size (realtime only)
+- Use `detail.average_price` as a reference price (realtime only)
+- For polling events, use `detail.new_value` and `detail.current_size` instead
+- Always check `trigger_market_regime` is null for wallet signals (no local market context)
+- The strategy must fetch its own market data if price validation is needed
+

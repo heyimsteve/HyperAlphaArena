@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'react-hot-toast'
+import Cookies from 'js-cookie'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -23,7 +24,8 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, Trash2, Edit, Activity, Eye, Sparkles, FlaskConical } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Plus, Trash2, Edit, Activity, Eye, Sparkles, FlaskConical, Wifi, WifiOff, RefreshCw, CircleHelp } from 'lucide-react'
 import SignalPreviewChart from './SignalPreviewChart'
 import AiSignalChatModal from './AiSignalChatModal'
 import MarketRegimeConfig from './MarketRegimeConfig'
@@ -82,6 +84,12 @@ interface SignalPool {
   enabled: boolean
   logic: 'OR' | 'AND'
   exchange: string
+  source_type?: 'market_signals' | 'wallet_tracking'
+  source_config?: {
+    addresses?: string[]
+    event_types?: string[]
+    sync_mode?: string
+  }
   created_at: string
 }
 
@@ -102,12 +110,131 @@ interface SignalTriggerLog {
   market_regime: MarketRegimeData | null
 }
 
+interface WalletTrackingRuntimeStatus {
+  enabled: boolean
+  status: string
+  tier: string | null
+  synced_addresses: string[]
+  last_connected_at: string | null
+  last_message_at: string | null
+  last_event_at: string | null
+  last_error: string | null
+  active_wallet_pool_count: number
+  token_synced_at: string | null
+}
+
+function parseUtcNaiveString(value?: string | null): Date | null {
+  if (!value) return null
+  const normalized = /[zZ]|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`
+  const parsed = new Date(normalized)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function formatWalletRuntimeTime(value?: string | null): string {
+  const parsed = parseUtcNaiveString(value)
+  return parsed ? parsed.toLocaleString() : '-'
+}
+
+function formatWalletTier(t: (key: string, fallback?: string) => string, tier?: string | null): string {
+  if (tier === 'paid') {
+    return t('signals.walletTracking.tierPremium', 'Premium (second-level detection)')
+  }
+  if (tier === 'free') {
+    return t('signals.walletTracking.tierFree', 'Free (minute-level detection)')
+  }
+  return '-'
+}
+
 interface FactorItem {
   name: string
   category: string
   description: string
   expression: string
   source: string
+}
+
+type PoolSourceType = 'market_signals' | 'wallet_tracking'
+
+const WALLET_EVENT_TYPES = [
+  'position_change',
+  'equity_change',
+  'fill',
+  'funding',
+  'transfer',
+  'liquidation',
+]
+
+function formatWalletEventType(t: (key: string, fallback?: string) => string, eventType: string): string {
+  switch (eventType) {
+    case 'position_change':
+      return t('signals.walletTracking.eventTypePositionChange', 'Position Change')
+    case 'equity_change':
+      return t('signals.walletTracking.eventTypeEquityChange', 'Equity Change')
+    case 'fill':
+      return t('signals.walletTracking.eventTypeFill', 'Trade Fill')
+    case 'funding':
+      return t('signals.walletTracking.eventTypeFunding', 'Funding')
+    case 'transfer':
+      return t('signals.walletTracking.eventTypeTransfer', 'Transfer')
+    case 'liquidation':
+      return t('signals.walletTracking.eventTypeLiquidation', 'Liquidation')
+    default:
+      return eventType
+  }
+}
+
+function formatWalletActionLabel(t: (key: string, fallback?: string) => string, action?: string | null): string {
+  switch (action) {
+    case 'open':
+      return t('signals.walletTracking.actionOpen', 'Opened')
+    case 'add':
+      return t('signals.walletTracking.actionAdd', 'Increased')
+    case 'reduce':
+      return t('signals.walletTracking.actionReduce', 'Reduced')
+    case 'close':
+      return t('signals.walletTracking.actionClose', 'Closed')
+    case 'flip':
+      return t('signals.walletTracking.actionFlip', 'Flipped')
+    case 'update':
+      return t('signals.walletTracking.actionUpdate', 'Updated')
+    default:
+      return action || '-'
+  }
+}
+
+function formatWalletDirectionLabel(t: (key: string, fallback?: string) => string, direction?: string | null): string {
+  switch (direction) {
+    case 'long':
+      return t('signals.walletTracking.directionLong', 'Long')
+    case 'short':
+      return t('signals.walletTracking.directionShort', 'Short')
+    case 'flat':
+      return t('signals.walletTracking.directionFlat', 'Flat')
+    default:
+      return direction || '-'
+  }
+}
+
+function formatWalletMetricValue(value: unknown, digits = 2): string | null {
+  if (typeof value !== 'number' || Number.isNaN(value)) return null
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  })
+}
+
+function formatShortAddress(address?: string | null): string {
+  if (!address) return '-'
+  if (address.length <= 14) return address
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function sortByCreatedAtDesc<T extends { created_at?: string | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aTime = parseUtcNaiveString(a.created_at)?.getTime() || 0
+    const bTime = parseUtcNaiveString(b.created_at)?.getTime() || 0
+    return bTime - aTime
+  })
 }
 
 // API functions
@@ -202,6 +329,22 @@ async function fetchTriggerLogs(options: {
   if (symbol) params.set('symbol', symbol)
   const res = await fetch(`${API_BASE}/logs?${params}`)
   if (!res.ok) throw new Error('Failed to fetch logs')
+  return res.json()
+}
+
+async function fetchWalletTrackingStatus(): Promise<WalletTrackingRuntimeStatus> {
+  const res = await fetch(`${API_BASE}/wallet-tracking/status`)
+  if (!res.ok) throw new Error('Failed to fetch wallet tracking status')
+  return res.json()
+}
+
+async function updateWalletTrackingRuntime(data: { enabled: boolean; access_token?: string }): Promise<WalletTrackingRuntimeStatus> {
+  const res = await fetch(`${API_BASE}/wallet-tracking/runtime`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Failed to update wallet tracking runtime')
   return res.json()
 }
 
@@ -409,6 +552,12 @@ export default function SignalManager() {
     enabled: true,
     logic: 'OR' as 'OR' | 'AND',
     exchange: 'hyperliquid',
+    source_type: 'market_signals' as PoolSourceType,
+    source_config: {
+      addresses: [] as string[],
+      event_types: ['position_change', 'fill', 'liquidation'] as string[],
+      sync_mode: 'ws_only',
+    },
   })
 
   // Metric analysis state
@@ -452,7 +601,11 @@ export default function SignalManager() {
   const [logsFilterSymbol, setLogsFilterSymbol] = useState<string>('')
   const [logsTotal, setLogsTotal] = useState(0)
   const [logsOffset, setLogsOffset] = useState(0)
+  const [walletRuntime, setWalletRuntime] = useState<WalletTrackingRuntimeStatus | null>(null)
+  const [walletRuntimeLoading, setWalletRuntimeLoading] = useState(false)
   const LOGS_PAGE_SIZE = 50
+  const sortedSignals = sortByCreatedAtDesc(signals)
+  const sortedPools = sortByCreatedAtDesc(pools)
 
   const loadData = async () => {
     try {
@@ -495,6 +648,18 @@ export default function SignalManager() {
       console.error('Failed to load accounts:', err)
     } finally {
       setAccountsLoading(false)
+    }
+  }
+
+  const loadWalletRuntime = async (silent: boolean = false) => {
+    try {
+      if (!silent) setWalletRuntimeLoading(true)
+      const data = await fetchWalletTrackingStatus()
+      setWalletRuntime(data)
+    } catch (err) {
+      if (!silent) toast.error(t('signals.walletTracking.loadStatusFailed', 'Failed to load wallet tracking status'))
+    } finally {
+      if (!silent) setWalletRuntimeLoading(false)
     }
   }
 
@@ -597,6 +762,7 @@ export default function SignalManager() {
     loadData()
     loadAccounts()
     loadWatchlist()
+    loadWalletRuntime(true)
     fetchFactorLibrary().then(setFactorLibrary)
 
     /**
@@ -622,6 +788,15 @@ export default function SignalManager() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (activeTab !== 'wallets') return
+    loadWalletRuntime()
+    const interval = setInterval(() => {
+      loadWalletRuntime(true)
+    }, 15000)
+    return () => clearInterval(interval)
+  }, [activeTab])
 
   // Auto-refresh logs only when on logs tab (silent, no loading)
   useEffect(() => {
@@ -1145,7 +1320,7 @@ export default function SignalManager() {
     }
   }
 
-  const openPoolDialog = (pool?: SignalPool) => {
+  const openPoolDialog = (pool?: SignalPool, initialSourceType: PoolSourceType = 'market_signals') => {
     if (pool) {
       setEditingPool(pool)
       setPoolForm({
@@ -1155,10 +1330,29 @@ export default function SignalManager() {
         enabled: pool.enabled,
         logic: pool.logic || 'OR',
         exchange: pool.exchange || 'hyperliquid',
+        source_type: pool.source_type || 'market_signals',
+        source_config: {
+          addresses: pool.source_config?.addresses || [],
+          event_types: pool.source_config?.event_types || ['position_change', 'fill', 'liquidation'],
+          sync_mode: pool.source_config?.sync_mode || 'ws_only',
+        },
       })
     } else {
       setEditingPool(null)
-      setPoolForm({ pool_name: '', signal_ids: [], symbols: [], enabled: true, logic: 'OR', exchange: 'hyperliquid' })
+      setPoolForm({
+        pool_name: '',
+        signal_ids: [],
+        symbols: [],
+        enabled: true,
+        logic: 'OR',
+        exchange: 'hyperliquid',
+        source_type: initialSourceType,
+        source_config: {
+          addresses: [],
+          event_types: ['position_change', 'fill', 'liquidation'],
+          sync_mode: 'ws_only',
+        },
+      })
     }
     setPoolDialogOpen(true)
   }
@@ -1166,6 +1360,16 @@ export default function SignalManager() {
   const handleSavePool = async () => {
     setSavingPool(true)
     try {
+      if (poolForm.source_type === 'wallet_tracking') {
+        if (!(poolForm.source_config.addresses || []).length) {
+          toast.error(t('signals.walletTracking.addressRequired', 'Select at least one synced wallet'))
+          return
+        }
+        if (!(poolForm.source_config.event_types || []).length) {
+          toast.error(t('signals.walletTracking.eventTypeRequired', 'Select at least one wallet event type'))
+          return
+        }
+      }
       const data = {
         pool_name: poolForm.pool_name,
         signal_ids: poolForm.signal_ids,
@@ -1173,6 +1377,8 @@ export default function SignalManager() {
         enabled: poolForm.enabled,
         logic: poolForm.logic,
         exchange: poolForm.exchange,
+        source_type: poolForm.source_type,
+        source_config: poolForm.source_config,
       }
       if (editingPool) {
         await updatePool(editingPool.id, data)
@@ -1226,6 +1432,68 @@ export default function SignalManager() {
     }))
   }
 
+  const toggleWalletEventType = (eventType: string) => {
+    setPoolForm(prev => {
+      const current = prev.source_config.event_types || []
+      const nextEventTypes = current.includes(eventType)
+        ? current.filter(item => item !== eventType)
+        : [...current, eventType]
+      return {
+        ...prev,
+        source_config: {
+          ...prev.source_config,
+          event_types: nextEventTypes,
+        },
+      }
+    })
+  }
+
+  const toggleWalletAddressInPool = (address: string) => {
+    setPoolForm(prev => {
+      const current = prev.source_config.addresses || []
+      const nextAddresses = current.includes(address)
+        ? current.filter(item => item !== address)
+        : [...current, address]
+      return {
+        ...prev,
+        source_config: {
+          ...prev.source_config,
+          addresses: nextAddresses,
+        },
+      }
+    })
+  }
+
+  const handleEnableWalletTracking = async () => {
+    try {
+      setWalletRuntimeLoading(true)
+      const accessToken = Cookies.get('arena_token')
+      const data = await updateWalletTrackingRuntime({
+        enabled: true,
+        access_token: accessToken,
+      })
+      setWalletRuntime(data)
+      toast.success(t('signals.walletTracking.enabledSuccess', 'Wallet tracking integration enabled'))
+    } catch (err) {
+      toast.error(t('signals.walletTracking.enableFailed', 'Failed to enable wallet tracking integration'))
+    } finally {
+      setWalletRuntimeLoading(false)
+    }
+  }
+
+  const handleDisableWalletTracking = async () => {
+    try {
+      setWalletRuntimeLoading(true)
+      const data = await updateWalletTrackingRuntime({ enabled: false })
+      setWalletRuntime(data)
+      toast.success(t('signals.walletTracking.disabledSuccess', 'Wallet tracking integration disabled'))
+    } catch (err) {
+      toast.error(t('signals.walletTracking.disableFailed', 'Failed to disable wallet tracking integration'))
+    } finally {
+      setWalletRuntimeLoading(false)
+    }
+  }
+
   const formatCondition = (cond: TriggerCondition) => {
     const metric = cond.metric?.startsWith('factor:')
       ? `⚗ ${cond.metric.split(':')[1]}`
@@ -1261,6 +1529,7 @@ export default function SignalManager() {
           <TabsList className="justify-start">
             <TabsTrigger value="signals" className="min-w-[100px]">{t('signals.tabs.signals', 'Signals')}</TabsTrigger>
             <TabsTrigger value="pools" className="min-w-[120px]">{t('signals.tabs.pools', 'Signal Pools')}</TabsTrigger>
+            <TabsTrigger value="wallets" className="min-w-[140px]">{t('signals.tabs.walletTracking', 'Wallet Tracking')}</TabsTrigger>
             <TabsTrigger value="logs" className="min-w-[120px]">{t('signals.tabs.logs', 'Trigger Logs')}</TabsTrigger>
             <TabsTrigger value="regime" className="min-w-[130px]">{t('signals.tabs.regime', 'Market Regime')}</TabsTrigger>
           </TabsList>
@@ -1294,7 +1563,7 @@ export default function SignalManager() {
 
         <TabsContent value="signals" className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {signals.map(signal => (
+            {sortedSignals.map(signal => (
               <Card key={signal.id}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
@@ -1332,7 +1601,7 @@ export default function SignalManager() {
 
         <TabsContent value="pools" className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           <div className="grid gap-4 md:grid-cols-2">
-            {pools.map(pool => (
+            {sortedPools.map(pool => (
               <Card key={pool.id}>
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
@@ -1349,44 +1618,198 @@ export default function SignalManager() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    <div>
-                      <span className="text-sm font-medium">{t('signals.symbols', 'Symbols')}: </span>
-                      <span className="text-sm">{pool.symbols.join(', ') || 'None'}</span>
-                    </div>
-                    <div>
-                      <span className="text-sm font-medium">{t('signals.tabs.signals', 'Signals')}: </span>
-                      <span className="text-sm">
-                        {pool.signal_ids.map(id => signals.find(s => s.id === id)?.signal_name).filter(Boolean).join(', ') || 'None'}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">
+                        {pool.source_type === 'wallet_tracking'
+                          ? t('signals.walletTracking.sourceTypeLabel', 'Wallet Tracking')
+                          : t('signals.dialog.marketSignalsType', 'Market Signals')}
                       </span>
                     </div>
-                    <div>
-                      <span className="text-sm font-medium">{t('signals.logic', 'Logic')}: </span>
-                      <span className={`text-sm px-2 py-0.5 rounded ${pool.logic === 'AND' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
-                        {pool.logic || 'OR'}
-                      </span>
-                      <span className="text-xs text-muted-foreground ml-2">
-                        {pool.logic === 'AND' ? `(${t('signals.allSignalsTrigger', 'All signals must trigger')})` : `(${t('signals.anySignalTriggers', 'Any signal triggers')})`}
-                      </span>
-                    </div>
+                    {pool.source_type === 'wallet_tracking' ? (
+                      <>
+                        <div>
+                          <span className="text-sm font-medium">{t('signals.walletTracking.addresses', 'Tracked Wallets')}: </span>
+                          <span className="text-sm">
+                            {pool.source_config?.addresses?.join(', ') || t('signals.walletTracking.noneSelected', 'None selected')}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-sm font-medium">{t('signals.walletTracking.eventTypes', 'Event Types')}: </span>
+                          <span className="text-sm">
+                            {(pool.source_config?.event_types || []).length
+                              ? (pool.source_config?.event_types || []).map(eventType => formatWalletEventType(t, eventType)).join(', ')
+                              : t('signals.walletTracking.noneSelected', 'None selected')}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <span className="text-sm font-medium">{t('signals.symbols', 'Symbols')}: </span>
+                          <span className="text-sm">{pool.symbols.join(', ') || 'None'}</span>
+                        </div>
+                        <div>
+                          <span className="text-sm font-medium">{t('signals.tabs.signals', 'Signals')}: </span>
+                          <span className="text-sm">
+                            {pool.signal_ids.map(id => signals.find(s => s.id === id)?.signal_name).filter(Boolean).join(', ') || 'None'}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {pool.source_type !== 'wallet_tracking' && (
+                      <div>
+                        <span className="text-sm font-medium">{t('signals.logic', 'Logic')}: </span>
+                        <span className={`text-sm px-2 py-0.5 rounded ${pool.logic === 'AND' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
+                          {pool.logic || 'OR'}
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-2">
+                          {pool.logic === 'AND' ? `(${t('signals.allSignalsTrigger', 'All signals must trigger')})` : `(${t('signals.anySignalTriggers', 'Any signal triggers')})`}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className={`w-2 h-2 rounded-full ${pool.enabled ? 'bg-green-500' : 'bg-gray-400'}`} />
                         <span className="text-xs">{pool.enabled ? t('signals.enabled', 'Enabled') : t('signals.disabled', 'Disabled')}</span>
                         <ExchangeBadge exchange={pool.exchange || 'hyperliquid'} size="xs" />
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => openPoolPreviewDialog(pool, watchlistSymbols[0] || 'BTC')}
-                        disabled={pool.signal_ids.length === 0}
-                      >
-                        <Eye className="w-4 h-4 mr-1" />{t('signals.backtest', 'Backtest')}
-                      </Button>
+                      {pool.source_type === 'wallet_tracking' ? (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled
+                                >
+                                  <Eye className="w-4 h-4 mr-1" />
+                                  {t('signals.backtest', 'Backtest')}
+                                  <CircleHelp className="w-3.5 h-3.5 ml-1 opacity-70" />
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-[260px] p-3">
+                              <p className="text-xs">{t('signals.walletTracking.backtestHint', 'Wallet signals come from real-time external events and are not available for historical replay backtesting in the current version.')}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openPoolPreviewDialog(pool, watchlistSymbols[0] || 'BTC')}
+                          disabled={pool.signal_ids.length === 0}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          {t('signals.backtest', 'Backtest')}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardContent>
               </Card>
             ))}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="wallets" className="space-y-4 flex-1 min-h-0 overflow-y-auto">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('signals.walletTracking.title', 'Wallet Tracking')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 lg:grid-cols-[0.95fr_1.05fr]">
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-medium">{t('signals.walletTracking.connectionStatus', 'Connection Status')}</div>
+                        <div className="text-xs text-muted-foreground">{t('signals.walletTracking.connectionHint', 'Enable Hyper Insight sync here. HAA will keep synced wallets available for pool selection and runtime matching.')}</div>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded inline-flex items-center gap-1 ${
+                        walletRuntime?.status === 'connected'
+                          ? 'bg-emerald-500/10 text-emerald-600'
+                          : walletRuntime?.enabled
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : 'bg-muted text-muted-foreground'
+                      }`}>
+                        {walletRuntime?.status === 'connected'
+                          ? <Wifi className="w-3 h-3" />
+                          : walletRuntime?.enabled
+                            ? <RefreshCw className="w-3 h-3 animate-spin" />
+                            : <WifiOff className="w-3 h-3" />}
+                        {walletRuntime?.status === 'connected'
+                          ? ((walletRuntime?.synced_addresses?.length || 0) > 0
+                            ? t('signals.walletTracking.connected', 'Connected')
+                            : t('signals.walletTracking.connectedNoWallets', 'Connected · No tracked wallets'))
+                          : walletRuntime?.status === 'waiting_for_token'
+                            ? t('signals.walletTracking.waitingForToken', 'Waiting for token')
+                            : walletRuntime?.enabled
+                                ? t('signals.walletTracking.connecting', 'Connecting')
+                                : t('signals.walletTracking.notConnected', 'Not Connected')}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-muted-foreground">
+                      <div>{t('signals.walletTracking.tier', 'Tier')}: <span className="text-foreground">{formatWalletTier(t, walletRuntime?.tier)}</span></div>
+                      <div>{t('signals.walletTracking.syncedWalletCount', 'Synced wallets')}: <span className="text-foreground">{walletRuntime?.synced_addresses?.length || 0}</span></div>
+                      <div>{t('signals.walletTracking.lastEventAt', 'Last event')}: <span className="text-foreground">{formatWalletRuntimeTime(walletRuntime?.last_event_at)}</span></div>
+                    </div>
+                    {walletRuntime?.last_error && (
+                      <div className="mt-3 text-xs text-red-500">
+                        {t('signals.walletTracking.lastError', 'Last error')}: {walletRuntime.last_error}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <div className="text-sm font-medium">{t('signals.walletTracking.syncedWallets', 'Synced Wallets')}</div>
+                    {walletRuntimeLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        {t('signals.walletTracking.loading', 'Loading...')}
+                      </div>
+                    ) : walletRuntime?.synced_addresses?.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {walletRuntime.synced_addresses.map(address => (
+                          <span key={address} className="rounded-md border px-2 py-1 text-xs">
+                            {address}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        {t('signals.walletTracking.noSyncedWallets', 'No synced wallets yet. Track wallets on Hyper Insight first.')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button asChild variant="outline" size="sm">
+                    <a href="https://hyper.akooi.com/" target="_blank" rel="noopener noreferrer">
+                      {t('signals.walletTracking.manageOnInsight', 'Manage on Hyper Insight')}
+                    </a>
+                  </Button>
+                  {walletRuntime?.enabled ? (
+                    <Button onClick={handleDisableWalletTracking} size="sm" variant="outline" disabled={walletRuntimeLoading}>
+                      {t('signals.walletTracking.disable', 'Disable Sync')}
+                    </Button>
+                  ) : (
+                    <Button onClick={handleEnableWalletTracking} size="sm" disabled={walletRuntimeLoading}>
+                      {t('signals.walletTracking.enable', 'Enable Sync')}
+                    </Button>
+                  )}
+                  <Button onClick={() => openPoolDialog(undefined, 'wallet_tracking')} size="sm">
+                    <Plus className="w-4 h-4 mr-2" />
+                    {t('signals.walletTracking.createWalletPool', 'Create Wallet Pool')}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t('signals.walletTracking.inlineHint', 'Connect here first. Once tracked wallets appear, choose which ones should enter HAA signal pools.')}
+                </p>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
@@ -1448,15 +1871,69 @@ export default function SignalManager() {
                     {logs.map(log => {
                       const triggerData = log.trigger_value as Record<string, unknown> | null
                       const timestamp = log.triggered_at.endsWith('Z') ? log.triggered_at : log.triggered_at + 'Z'
+                      const isWalletTrigger = Boolean(
+                        log.pool_id &&
+                        triggerData &&
+                        triggerData.source_type === 'wallet_tracking'
+                      )
                       const isPoolTrigger = log.pool_id && triggerData && 'logic' in triggerData
                       const pool = log.pool_id ? pools.find(p => p.id === log.pool_id) : null
                       const signal = log.signal_id ? signals.find(s => s.id === log.signal_id) : null
-                      const poolName = isPoolTrigger ? pool?.pool_name : null
+                      const poolName = log.pool_id ? pool?.pool_name : null
                       const signalName = signal?.signal_name
                       const logExchange = pool?.exchange || signal?.exchange || 'hyperliquid'
 
                       const formatTriggerDetails = () => {
                         if (!triggerData) return null
+                        if (triggerData.source_type === 'wallet_tracking') {
+                          const eventType = typeof triggerData.event_type === 'string'
+                            ? formatWalletEventType(t, triggerData.event_type)
+                            : t('signals.walletTracking.sourceTypeLabel', 'Wallet Tracking')
+                          const address = typeof triggerData.address === 'string' ? triggerData.address : null
+                          const summary = typeof triggerData.summary === 'string' ? triggerData.summary : null
+                          const detail = (typeof triggerData.detail === 'object' && triggerData.detail && !Array.isArray(triggerData.detail))
+                            ? triggerData.detail as Record<string, unknown>
+                            : null
+                          const action = typeof detail?.action === 'string'
+                            ? formatWalletActionLabel(t, detail.action)
+                            : null
+                          const direction = typeof detail?.direction === 'string'
+                            ? formatWalletDirectionLabel(t, detail.direction)
+                            : null
+                          const notionalValue = formatWalletMetricValue(detail?.notional_value)
+                          const closedPnl = formatWalletMetricValue(detail?.closed_pnl)
+                          const averagePrice = formatWalletMetricValue(detail?.average_price, 4)
+                          return (
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="px-1.5 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400">
+                                  {eventType}
+                                </span>
+                                {address && <span>{formatShortAddress(address)}</span>}
+                              </div>
+                              {summary && <div>{summary}</div>}
+                              {(action || direction || notionalValue || closedPnl || averagePrice) && (
+                                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                                  {action && (
+                                    <span>{t('signals.walletTracking.logAction', 'Action')}: <span className="text-foreground">{action}</span></span>
+                                  )}
+                                  {direction && (
+                                    <span>{t('signals.walletTracking.logDirection', 'Direction')}: <span className="text-foreground">{direction}</span></span>
+                                  )}
+                                  {notionalValue && (
+                                    <span>{t('signals.walletTracking.logNotional', 'Notional')}: <span className="text-foreground">${notionalValue}</span></span>
+                                  )}
+                                  {closedPnl && (
+                                    <span>{t('signals.walletTracking.logClosedPnl', 'Closed PnL')}: <span className="text-foreground">${closedPnl}</span></span>
+                                  )}
+                                  {averagePrice && (
+                                    <span>{t('signals.walletTracking.logAveragePrice', 'Avg Price')}: <span className="text-foreground">{averagePrice}</span></span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
                         // Pool trigger (new format)
                         if ('logic' in triggerData && 'signals_triggered' in triggerData) {
                           const logic = triggerData.logic as string
@@ -1507,10 +1984,10 @@ export default function SignalManager() {
                       return (
                         <div key={log.id} className="p-3 bg-muted rounded">
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-primary">{log.symbol}</span>
-                              <ExchangeBadge exchange={logExchange} size="xs" />
-                              {isPoolTrigger ? (
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-primary">{log.symbol}</span>
+                            <ExchangeBadge exchange={logExchange} size="xs" />
+                              {isWalletTrigger || isPoolTrigger ? (
                                 <span className="text-sm px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">
                                   Pool: {poolName || `#${log.pool_id}`}
                                 </span>
@@ -2024,118 +2501,208 @@ export default function SignalManager() {
 
       {/* Pool Dialog */}
       <Dialog open={poolDialogOpen} onOpenChange={setPoolDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>{editingPool ? t('signals.dialog.editPool', 'Edit Pool') : t('signals.dialog.newPool', 'New Pool')}</DialogTitle>
             <DialogDescription>{t('signals.dialog.configurePool', 'Configure signal pool')}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>{t('signals.dialog.poolNameLabel', 'Pool Name')}</Label>
-              <Input
-                value={poolForm.pool_name}
-                onChange={e => setPoolForm(prev => ({ ...prev, pool_name: e.target.value }))}
-                placeholder={t('signals.dialog.poolNamePlaceholder', 'e.g., BTC Momentum Pool')}
-              />
-            </div>
-            <div>
-              <Label>{t('signals.dialog.exchangeLabel', 'Exchange')}</Label>
-              <Select value={poolForm.exchange} onValueChange={v => {
-                // Clear signals that don't match the new exchange
-                const matchingSignalIds = poolForm.signal_ids.filter(id => {
-                  const signal = signals.find(s => s.id === id)
-                  return signal?.exchange === v
-                })
-                setPoolForm(prev => ({ ...prev, exchange: v, signal_ids: matchingSignalIds }))
-                // Reload watchlist for the new exchange
-                loadWatchlist(v)
-              }}>
-                <SelectTrigger>
-                  <SelectValue>
-                    <span className="flex items-center gap-2">
-                      {poolForm.exchange === 'hyperliquid' ? <HyperliquidLogo /> : <BinanceLogo />}
-                      {poolForm.exchange === 'hyperliquid' ? 'Hyperliquid' : 'Binance'}
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="hyperliquid">
-                    <span className="flex items-center gap-2"><HyperliquidLogo />Hyperliquid</span>
-                  </SelectItem>
-                  <SelectItem value="binance">
-                    <span className="flex items-center gap-2"><BinanceLogo />Binance</span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('signals.dialog.exchangeDesc', 'Select the exchange data source for this signal')}
-              </p>
-            </div>
-            <div>
-              <Label>{t('signals.dialog.symbolsLabel', 'Symbols')}</Label>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {watchlistSymbols.length > 0 ? (
-                  watchlistSymbols.map(symbol => (
-                    <Button
-                      key={symbol}
-                      variant={poolForm.symbols.includes(symbol) ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => toggleSymbol(symbol)}
-                    >
-                      {symbol}
-                    </Button>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted-foreground">{t('signals.dialog.noSymbolsInWatchlist', 'No symbols in watchlist. Configure watchlist first.')}</p>
-                )}
+          <div className="grid gap-6 lg:grid-cols-[0.95fr_1.25fr]">
+            <div className="space-y-4">
+              <div>
+                <Label>{t('signals.dialog.poolNameLabel', 'Pool Name')}</Label>
+                <Input
+                  value={poolForm.pool_name}
+                  onChange={e => setPoolForm(prev => ({ ...prev, pool_name: e.target.value }))}
+                  placeholder={t('signals.dialog.poolNamePlaceholder', 'e.g., BTC Momentum Pool')}
+                />
               </div>
-            </div>
-            <div>
-              <Label>{t('signals.dialog.signalsLabel', 'Signals')}</Label>
-              <div className="space-y-2 mt-2 max-h-40 overflow-y-auto">
-                {signals.map(signal => {
-                  const isMatchingExchange = signal.exchange === poolForm.exchange
-                  const isDisabled = !isMatchingExchange
-                  return (
-                    <div key={signal.id} className={`flex items-center gap-2 ${isDisabled ? 'opacity-50' : ''}`}>
-                      <Switch
-                        checked={poolForm.signal_ids.includes(signal.id)}
-                        onCheckedChange={() => toggleSignalInPool(signal.id)}
-                        disabled={isDisabled}
-                      />
-                      <span className="text-sm flex items-center gap-1.5">
-                        {signal.signal_name}
-                        {isDisabled && (
-                          <span className="inline-flex items-center" title={`${signal.exchange} signal`}>
-                            {signal.exchange === 'binance' ? <BinanceLogo /> : <HyperliquidLogo />}
-                          </span>
-                        )}
+              <div>
+                <Label>{t('signals.dialog.sourceTypeLabel', 'Source Type')}</Label>
+                <Select
+                  value={poolForm.source_type}
+                  onValueChange={(v: PoolSourceType) =>
+                    setPoolForm(prev => ({
+                      ...prev,
+                      source_type: v,
+                      logic: v === 'wallet_tracking' ? 'OR' : prev.logic,
+                      signal_ids: v === 'market_signals' ? prev.signal_ids : [],
+                      symbols: v === 'market_signals' ? prev.symbols : [],
+                      source_config: v === 'wallet_tracking'
+                        ? {
+                            ...prev.source_config,
+                            addresses: prev.source_config.addresses || [],
+                            event_types: prev.source_config.event_types || ['position_change', 'fill', 'liquidation'],
+                            sync_mode: 'ws_only',
+                          }
+                        : {
+                            addresses: [],
+                            event_types: ['position_change', 'fill', 'liquidation'],
+                            sync_mode: 'ws_only',
+                          },
+                    }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="market_signals">{t('signals.dialog.marketSignalsType', 'Market Signals')}</SelectItem>
+                    <SelectItem value="wallet_tracking">{t('signals.walletTracking.sourceTypeLabel', 'Wallet Tracking')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {poolForm.source_type === 'wallet_tracking'
+                    ? t('signals.walletTracking.poolConfigHint', 'Wallet pools use synced Hyper Insight wallets and real-time event types instead of market indicators.')
+                    : t('signals.dialog.marketSignalsTypeHint', 'Market pools continue to use symbols, signal definitions, and exchange-specific trigger logic.')}
+                </p>
+              </div>
+              <div>
+                <Label>{t('signals.dialog.exchangeLabel', 'Exchange')}</Label>
+                <Select value={poolForm.exchange} onValueChange={v => {
+                  if (poolForm.source_type === 'market_signals') {
+                    const matchingSignalIds = poolForm.signal_ids.filter(id => {
+                      const signal = signals.find(s => s.id === id)
+                      return signal?.exchange === v
+                    })
+                    setPoolForm(prev => ({ ...prev, exchange: v, signal_ids: matchingSignalIds }))
+                    loadWatchlist(v)
+                    return
+                  }
+                  setPoolForm(prev => ({ ...prev, exchange: v }))
+                }}>
+                  <SelectTrigger>
+                    <SelectValue>
+                      <span className="flex items-center gap-2">
+                        {poolForm.exchange === 'hyperliquid' ? <HyperliquidLogo /> : <BinanceLogo />}
+                        {poolForm.exchange === 'hyperliquid' ? 'Hyperliquid' : 'Binance'}
                       </span>
-                    </div>
-                  )
-                })}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hyperliquid">
+                      <span className="flex items-center gap-2"><HyperliquidLogo />Hyperliquid</span>
+                    </SelectItem>
+                    <SelectItem value="binance">
+                      <span className="flex items-center gap-2"><BinanceLogo />Binance</span>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t('signals.dialog.exchangeDesc', 'Select the target exchange for this pool')}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 pt-2">
+                <Switch checked={poolForm.enabled} onCheckedChange={v => setPoolForm(prev => ({ ...prev, enabled: v }))} />
+                <Label>{t('signals.dialog.enabledLabel', 'Enabled')}</Label>
               </div>
             </div>
-            <div>
-              <Label>{t('signals.dialog.triggerLogicLabel', 'Trigger Logic')}</Label>
-              <Select value={poolForm.logic} onValueChange={(v: 'OR' | 'AND') => setPoolForm(prev => ({ ...prev, logic: v }))}>
-                <SelectTrigger className="mt-2">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="OR">{t('signals.dialog.orLogic', 'OR - Any signal triggers pool')}</SelectItem>
-                  <SelectItem value="AND">{t('signals.dialog.andLogic', 'AND - All signals must trigger')}</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                {poolForm.logic === 'AND'
-                  ? t('signals.dialog.andLogicDesc', 'Pool triggers only when ALL selected signals meet their conditions simultaneously')
-                  : t('signals.dialog.orLogicDesc', 'Pool triggers when ANY selected signal meets its condition')}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch checked={poolForm.enabled} onCheckedChange={v => setPoolForm(prev => ({ ...prev, enabled: v }))} />
-              <Label>{t('signals.dialog.enabledLabel', 'Enabled')}</Label>
+
+            <div className="space-y-4">
+              {poolForm.source_type === 'market_signals' ? (
+                <>
+                  <div>
+                    <Label>{t('signals.dialog.symbolsLabel', 'Symbols')}</Label>
+                    <div className="flex flex-wrap gap-2 mt-2 rounded-lg border p-3">
+                      {watchlistSymbols.length > 0 ? (
+                        watchlistSymbols.map(symbol => (
+                          <Button
+                            key={symbol}
+                            variant={poolForm.symbols.includes(symbol) ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => toggleSymbol(symbol)}
+                          >
+                            {symbol}
+                          </Button>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">{t('signals.dialog.noSymbolsInWatchlist', 'No symbols in watchlist. Configure watchlist first.')}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Label>{t('signals.dialog.signalsLabel', 'Signals')}</Label>
+                    <div className="space-y-2 mt-2 max-h-48 overflow-y-auto rounded-lg border p-3">
+                      {signals.map(signal => {
+                        const isMatchingExchange = signal.exchange === poolForm.exchange
+                        const isDisabled = !isMatchingExchange
+                        return (
+                          <div key={signal.id} className={`flex items-center gap-2 ${isDisabled ? 'opacity-50' : ''}`}>
+                            <Switch
+                              checked={poolForm.signal_ids.includes(signal.id)}
+                              onCheckedChange={() => toggleSignalInPool(signal.id)}
+                              disabled={isDisabled}
+                            />
+                            <span className="text-sm flex items-center gap-1.5">
+                              {signal.signal_name}
+                              {isDisabled && (
+                                <span className="inline-flex items-center" title={`${signal.exchange} signal`}>
+                                  {signal.exchange === 'binance' ? <BinanceLogo /> : <HyperliquidLogo />}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <Label>{t('signals.dialog.triggerLogicLabel', 'Trigger Logic')}</Label>
+                    <Select value={poolForm.logic} onValueChange={(v: 'OR' | 'AND') => setPoolForm(prev => ({ ...prev, logic: v }))}>
+                      <SelectTrigger className="mt-2">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="OR">{t('signals.dialog.orLogic', 'OR - Any signal triggers pool')}</SelectItem>
+                        <SelectItem value="AND">{t('signals.dialog.andLogic', 'AND - All signals must trigger')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {poolForm.logic === 'AND'
+                        ? t('signals.dialog.andLogicDesc', 'Pool triggers only when ALL selected signals meet their conditions simultaneously')
+                        : t('signals.dialog.orLogicDesc', 'Pool triggers when ANY selected signal meets its condition')}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <Label>{t('signals.walletTracking.addresses', 'Tracked Wallets')}</Label>
+                    <div className="mt-2 flex flex-wrap gap-2 rounded-lg border p-3 min-h-[120px] content-start">
+                      {walletRuntime?.synced_addresses?.length ? (
+                        walletRuntime.synced_addresses.map(address => (
+                          <Button
+                            key={address}
+                            variant={(poolForm.source_config.addresses || []).includes(address) ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => toggleWalletAddressInPool(address)}
+                          >
+                            {address}
+                          </Button>
+                        ))
+                      ) : (
+                        <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground w-full">
+                          {t('signals.walletTracking.addressSyncPlaceholder', 'Tracked wallet sync will appear here after the Hyper Insight websocket client is enabled. New synced wallets stay opt-in and are never added to an existing pool automatically.')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Label>{t('signals.walletTracking.eventTypes', 'Event Types')}</Label>
+                    <div className="flex flex-wrap gap-2 mt-2 rounded-lg border p-3 min-h-[88px] content-start">
+                      {WALLET_EVENT_TYPES.map(eventType => (
+                        <Button
+                          key={eventType}
+                          variant={(poolForm.source_config.event_types || []).includes(eventType) ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => toggleWalletEventType(eventType)}
+                        >
+                          {formatWalletEventType(t, eventType)}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <DialogFooter>

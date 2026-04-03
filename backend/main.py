@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 import subprocess
 import threading
 import time
@@ -23,6 +24,8 @@ from database.models import TradingConfig, User, Account, SystemConfig, AccountA
 from services.asset_curve_calculator import invalidate_asset_curve_cache
 from config.settings import DEFAULT_TRADING_CONFIGS
 from version import __version__
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Hyper Alpha Arena API",
@@ -72,7 +75,100 @@ if os.path.exists(static_dir):
 
 # Frontend file watcher
 frontend_watcher_thread = None
+runtime_monitor_thread = None
+runtime_monitor_running = False
 last_build_time = 0
+
+THREAD_WARNING_THRESHOLDS = (200, 400, 800, 1200)
+AI_QUEUE_WARNING_THRESHOLDS = (8, 16, 32)
+RUNTIME_MONITOR_INTERVAL_SECONDS = int(os.getenv("RUNTIME_MONITOR_INTERVAL_SECONDS", "300"))
+
+
+def _get_current_thread_count() -> int:
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Threads:"):
+                    return int(line.split()[1])
+    except Exception:
+        return -1
+    return -1
+
+
+def _start_runtime_monitor():
+    """Log warning-only threshold crossings for thread growth and AI queue buildup."""
+    global runtime_monitor_thread, runtime_monitor_running
+
+    if runtime_monitor_running:
+        return
+
+    def monitor_loop():
+        from services.ai_stream_service import get_ai_runtime_stats
+
+        thread_level = 0
+        task_queue_level = 0
+        bg_queue_level = 0
+
+        def get_threshold_level(value: int, thresholds: tuple[int, ...]) -> int:
+            level = 0
+            for idx, threshold in enumerate(thresholds, start=1):
+                if value >= threshold:
+                    level = idx
+                else:
+                    break
+            return level
+
+        while runtime_monitor_running:
+            try:
+                thread_count = _get_current_thread_count()
+                ai_stats = get_ai_runtime_stats()
+
+                next_thread_level = get_threshold_level(thread_count, THREAD_WARNING_THRESHOLDS) if thread_count >= 0 else 0
+                if next_thread_level > thread_level:
+                    threshold = THREAD_WARNING_THRESHOLDS[next_thread_level - 1]
+                    logger.warning(
+                        "[RuntimeMonitor] Thread count crossed threshold: threads=%s threshold=%s ai_running=%s ai_task_queue=%s ai_bg_queue=%s",
+                        thread_count,
+                        threshold,
+                        ai_stats["running_tasks"],
+                        ai_stats["task_queue"],
+                        ai_stats["background_queue"],
+                    )
+                thread_level = next_thread_level
+
+                next_task_queue_level = get_threshold_level(ai_stats["task_queue"], AI_QUEUE_WARNING_THRESHOLDS)
+                if next_task_queue_level > task_queue_level:
+                    threshold = AI_QUEUE_WARNING_THRESHOLDS[next_task_queue_level - 1]
+                    logger.warning(
+                        "[RuntimeMonitor] AI task queue crossed threshold: queue=%s threshold=%s running=%s workers=%s threads=%s",
+                        ai_stats["task_queue"],
+                        threshold,
+                        ai_stats["running_tasks"],
+                        ai_stats["task_max_workers"],
+                        ai_stats["task_threads"],
+                    )
+                task_queue_level = next_task_queue_level
+
+                next_bg_queue_level = get_threshold_level(ai_stats["background_queue"], AI_QUEUE_WARNING_THRESHOLDS)
+                if next_bg_queue_level > bg_queue_level:
+                    threshold = AI_QUEUE_WARNING_THRESHOLDS[next_bg_queue_level - 1]
+                    logger.warning(
+                        "[RuntimeMonitor] AI background queue crossed threshold: queue=%s threshold=%s workers=%s threads=%s",
+                        ai_stats["background_queue"],
+                        threshold,
+                        ai_stats["background_max_workers"],
+                        ai_stats["background_threads"],
+                    )
+                bg_queue_level = next_bg_queue_level
+
+            except Exception as e:
+                print(f"[runtime-monitor] non-fatal monitor error: {e}", flush=True)
+
+            time.sleep(RUNTIME_MONITOR_INTERVAL_SECONDS)
+
+    runtime_monitor_running = True
+    runtime_monitor_thread = threading.Thread(target=monitor_loop, daemon=True, name="runtime-monitor")
+    runtime_monitor_thread.start()
 
 def build_frontend():
     """Build frontend and copy to static directory"""
@@ -182,6 +278,9 @@ def on_startup():
     frontend_watcher_thread = threading.Thread(target=watch_frontend_files, daemon=True)
     frontend_watcher_thread.start()
     print("Frontend file watcher started")
+
+    _start_runtime_monitor()
+    print("Runtime monitor started")
 
     # Create tables
     Base.metadata.create_all(bind=engine)
@@ -561,8 +660,22 @@ async def restore_discord_gateway():
         print(f"[startup] Discord Gateway restore failed (non-fatal): {e}")
 
 
+@app.on_event("startup")
+async def startup_hyper_insight_wallet_runtime():
+    """Start Hyper Insight wallet runtime service."""
+    try:
+        from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+        await hyper_insight_wallet_service.startup()
+        print("[startup] Hyper Insight wallet runtime initialized")
+    except Exception as e:
+        print(f"[startup] Hyper Insight wallet runtime failed (non-fatal): {e}")
+
+
 @app.on_event("shutdown")
 def on_shutdown():
+    global runtime_monitor_running
+    runtime_monitor_running = False
+
     # Shutdown all services (scheduler, market data tasks, auto trading, etc.)
     from services.startup import shutdown_services
     shutdown_services()
@@ -576,6 +689,16 @@ async def shutdown_discord_gateway():
         await stop_discord_gateway()
     except Exception as e:
         print(f"[shutdown] Discord Gateway stop failed (non-fatal): {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_hyper_insight_wallet_runtime():
+    """Stop Hyper Insight wallet runtime service."""
+    try:
+        from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+        await hyper_insight_wallet_service.shutdown()
+    except Exception as e:
+        print(f"[shutdown] Hyper Insight wallet runtime stop failed (non-fatal): {e}")
 
 
 # API routes

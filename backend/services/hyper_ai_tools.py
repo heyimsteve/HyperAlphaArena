@@ -16,9 +16,11 @@ import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone, timedelta
 
+import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 
+from database.models import SystemConfig
 from services.hyper_ai_subagents import SUBAGENT_TOOLS, execute_subagent_tool
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,35 @@ HYPER_AI_TOOLS = [
                     "trader_id": {"type": "integer", "description": "AI Trader ID to diagnose"}
                 },
                 "required": ["trader_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_tracked_address",
+            "description": "Get private Hyper Insight address detail for a tracked wallet. Returns factual data for recent activity analysis; recent fills are limited and do not represent the wallet's complete all-time trade history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {
+                        "type": "string",
+                        "description": "Tracked wallet address to analyze"
+                    }
+                },
+                "required": ["address"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_tracked_wallets",
+            "description": "Get the current Hyper Insight wallet sync status and the tracked wallet addresses currently synced into Hyper Alpha Arena. Use this to see whether Hyper Insight is connected and which wallets are currently available to wallet-tracking signal pools.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -1867,6 +1898,15 @@ def execute_list_signal_pools(db: Session, pool_id: int = None) -> str:
                 except Exception:
                     symbols = []
 
+            source_type = pool.source_type or "market_signals"
+            source_config = {}
+            if getattr(pool, "source_config", None):
+                try:
+                    raw = pool.source_config
+                    source_config = json.loads(raw) if isinstance(raw, str) else raw
+                except Exception:
+                    source_config = {}
+
             # Get signal details from trigger_condition
             signals = []
             for sid in signal_ids:
@@ -1894,9 +1934,11 @@ def execute_list_signal_pools(db: Session, pool_id: int = None) -> str:
                 "name": pool.pool_name,
                 "symbols": symbols,
                 "exchange": pool.exchange or "hyperliquid",
+                "source_type": source_type,
                 "logic": pool.logic or "OR",
                 "enabled": pool.enabled,
-                "signals": signals
+                "signals": signals,
+                "source_config": source_config if source_type == "wallet_tracking" else {},
             })
 
         return json.dumps({"signal_pools": result, "count": len(result)}, indent=2)
@@ -1904,6 +1946,109 @@ def execute_list_signal_pools(db: Session, pool_id: int = None) -> str:
     except Exception as e:
         logger.error(f"[list_signal_pools] Error: {e}")
         return json.dumps({"error": str(e)})
+
+
+def execute_analyze_tracked_address(db: Session, address: str) -> str:
+    """Fetch protected Hyper Insight address detail for Hyper AI analysis."""
+    from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+
+    normalized = (address or "").strip().lower()
+    if not normalized:
+        return json.dumps({"error": "address is required"})
+
+    snapshot = hyper_insight_wallet_service.get_status_snapshot()
+    synced_addresses = [str(item).strip().lower() for item in (snapshot.get("synced_addresses") or []) if str(item).strip()]
+    synced_set = set(synced_addresses)
+
+    token_row = db.query(SystemConfig).filter(SystemConfig.key == "hyper_insight_wallet_access_token").first()
+    access_token = (token_row.value if token_row else "") or ""
+    if not access_token:
+        return json.dumps({
+            "error": "Hyper Insight is not connected in Hyper Alpha Arena.",
+            "next_steps": [
+                "Open Hyper Alpha Arena and use the left sidebar to enter Signals > Wallet Tracking.",
+                "Enable sync and wait until your tracked wallets appear before asking for wallet analysis."
+            ]
+        }, ensure_ascii=False)
+
+    if snapshot.get("status") != "connected":
+        return json.dumps({
+            "error": "Wallet Tracking is not connected yet in Hyper Alpha Arena.",
+            "next_steps": [
+                "Open Hyper Alpha Arena and use the left sidebar to enter Signals > Wallet Tracking.",
+                "Enable sync and wait until the connection status becomes connected before requesting wallet analysis."
+            ]
+        }, ensure_ascii=False)
+
+    if normalized not in synced_set:
+        return json.dumps({
+            "error": "This wallet is not currently in your synced wallet list.",
+            "next_steps": [
+                "Track the wallet on https://hyper.akooi.com/ if it is not already tracked there.",
+                "Then return to Hyper Alpha Arena > Signals > Wallet Tracking and wait until the wallet appears in the synced wallet list."
+            ]
+        }, ensure_ascii=False)
+
+    service_token = os.getenv("HYPER_INSIGHT_SERVICE_TOKEN", "").strip()
+    if not service_token:
+        return json.dumps({
+            "error": "Tracked wallet analysis is temporarily unavailable right now.",
+            "next_steps": [
+                "Wallet Tracking is already connected and the wallet is already in your synced list.",
+                "This means the current failure is system-side rather than a wallet tracking problem. Please retry later."
+            ]
+        }, ensure_ascii=False)
+
+    base_url = os.getenv("HYPER_INSIGHT_API_BASE_URL", "https://hyper.akooi.com").rstrip("/")
+    url = f"{base_url}/api/s2s/addresses/{normalized}"
+    headers = {
+        "X-Service-Token": service_token,
+        "Authorization": f"Bearer {access_token}",
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code == 404:
+            return json.dumps({
+                "error": "This wallet is temporarily unavailable for detailed analysis right now.",
+                "next_steps": [
+                    "Wallet Tracking is already connected and the wallet is already in your synced list.",
+                    "This means the current failure is system-side rather than a wallet tracking problem. Please retry later."
+                ]
+            }, ensure_ascii=False)
+        if response.status_code == 401:
+            return json.dumps({
+                "error": "Your Hyper Insight session in Hyper Alpha Arena is no longer valid.",
+                "next_steps": [
+                    "Refresh Hyper Alpha Arena, open Signals > Wallet Tracking, and enable sync again.",
+                    "After the tracked wallet list is visible again, retry the wallet analysis request."
+                ]
+            }, ensure_ascii=False)
+        if response.status_code == 403:
+            return json.dumps({
+                "error": "Tracked wallet analysis is temporarily unavailable right now.",
+                "next_steps": [
+                    "Wallet Tracking is connected and the wallet is already in your synced list.",
+                    "This means the current failure is system-side rather than a wallet tracking problem. Please retry later."
+                ]
+            }, ensure_ascii=False)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload.setdefault(
+                "analysis_limit_note",
+                "Recent fills are limited to the latest window and do not represent the address's complete all-time trade history.",
+            )
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    except requests.RequestException as exc:
+        logger.error("[analyze_tracked_address] Error fetching %s: %s", normalized, exc)
+        return json.dumps({
+            "error": "Failed to fetch Hyper Insight address detail right now.",
+            "next_steps": [
+                "If Wallet Tracking is connected and the wallet is already in your synced list, then the current failure is system-side.",
+                "Please retry later."
+            ]
+        }, ensure_ascii=False)
 
 
 def execute_list_strategies(db: Session, strategy_id: int = None, strategy_type: str = None) -> str:
@@ -2893,6 +3038,26 @@ def execute_fetch_url(url: str, max_length: int = 8000) -> str:
     })
 
 
+def execute_get_tracked_wallets(db: Session) -> str:
+    """Return the current Hyper Insight sync state and synced tracked wallets."""
+    from services.hyper_insight_wallet_service import hyper_insight_wallet_service
+
+    snapshot = hyper_insight_wallet_service.get_status_snapshot()
+    synced_addresses = snapshot.get("synced_addresses") or []
+    result = {
+        "connected": snapshot.get("status") == "connected",
+        "status": snapshot.get("status"),
+        "tier": snapshot.get("tier"),
+        "tracked_wallet_count": len(synced_addresses),
+        "tracked_wallets": synced_addresses,
+        "last_connected_at": snapshot.get("last_connected_at"),
+        "last_event_at": snapshot.get("last_event_at"),
+        "last_error": snapshot.get("last_error"),
+        "usage_note": "This list reflects the wallets currently synced from Hyper Insight into Hyper Alpha Arena. It is the correct source for what Hyper AI can currently inspect in this Arena session.",
+    }
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
 def execute_hyper_ai_tool(
     db: Session, tool_name: str, arguments: Dict[str, Any],
     user_id: int = 1, api_config: Optional[Dict[str, Any]] = None
@@ -2967,6 +3132,15 @@ def execute_hyper_ai_tool(
 
         elif tool_name == "diagnose_trader_issues":
             return execute_diagnose_trader_issues(db, trader_id=arguments.get("trader_id"))
+
+        elif tool_name == "analyze_tracked_address":
+            return execute_analyze_tracked_address(
+                db,
+                address=arguments.get("address", ""),
+            )
+
+        elif tool_name == "get_tracked_wallets":
+            return execute_get_tracked_wallets(db)
 
         elif tool_name == "save_signal_pool":
             return execute_save_signal_pool(

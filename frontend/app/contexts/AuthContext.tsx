@@ -34,6 +34,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMembership(null)
   }
 
+  const syncHyperInsightRuntimeToken = async (token: string | null) => {
+    try {
+      if (!token) {
+        await fetch('/api/signals/wallet-tracking/token', { method: 'DELETE' })
+        return
+      }
+
+      await fetch('/api/signals/wallet-tracking/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_token: token }),
+      })
+    } catch (error) {
+      console.warn('[AuthContext] Failed to sync Hyper Insight runtime token:', error)
+    }
+  }
+
   // Function to handle token refresh
   const handleTokenRefresh = async (force: boolean = false): Promise<boolean> => {
     const currentToken = Cookies.get('arena_token')
@@ -64,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!tokenResponse || !tokenResponse.access_token) {
         console.error('[AuthContext] Failed to refresh token')
+        await syncHyperInsightRuntimeToken(null)
         clearAuthState()
         return false
       }
@@ -73,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (tokenResponse.refresh_token) {
         Cookies.set('arena_refresh_token', tokenResponse.refresh_token, { expires: 30 })
       }
+      await syncHyperInsightRuntimeToken(tokenResponse.access_token)
 
       // Update user info with new token
       const userData = await getUserInfo(tokenResponse.access_token)
@@ -83,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return true
       } else {
         console.error('[AuthContext] Failed to get user info after token refresh')
+        await syncHyperInsightRuntimeToken(null)
         clearAuthState()
         return false
       }
@@ -233,8 +253,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (userData) {
               setUser(userData)
               Cookies.set('arena_user', JSON.stringify(userData), { expires: 7 })
+              await syncHyperInsightRuntimeToken(token)
               scheduleTokenRefresh()
             } else {
+              await syncHyperInsightRuntimeToken(null)
               clearAuthState()
             }
           }
@@ -282,6 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     Cookies.remove('arena_token')
     Cookies.remove('arena_refresh_token')
     Cookies.remove('arena_user')
+    await syncHyperInsightRuntimeToken(null)
     setUser(null)
     setMembership(null)
 

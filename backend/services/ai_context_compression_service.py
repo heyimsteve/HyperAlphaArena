@@ -27,7 +27,6 @@ Usage:
 """
 import json
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
@@ -35,6 +34,7 @@ import requests
 import tiktoken
 from sqlalchemy.orm import Session
 
+from services.ai_stream_service import submit_ai_background_task
 from services.system_logger import system_logger
 
 logger = logging.getLogger(__name__)
@@ -736,12 +736,7 @@ def compress_messages(
                 finally:
                     bg_db.close()
 
-            thread = threading.Thread(
-                target=_extract_memories_bg,
-                args=(conv_text, api_config_copy),
-                daemon=True
-            )
-            thread.start()
+            submit_ai_background_task(_extract_memories_bg, conv_text, api_config_copy)
         except Exception as e:
             logger.warning(f"[Compression] Failed to start memory extraction thread: {e}")
 
