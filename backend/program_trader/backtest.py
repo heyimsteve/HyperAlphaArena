@@ -97,23 +97,21 @@ class BacktestDataProvider:
 
     def get_factor(self, symbol: str, factor_name: str) -> Dict:
         """Compute factor value from historical K-line slice at current_index."""
-        from database.models import CustomFactor
-        from services.factor_expression_engine import factor_expression_engine
         from database.connection import SessionLocal
-        import pandas as pd
+        from services.factor_resolver import (
+            compute_factor_value,
+            resolve_factor_definition,
+            extract_factor_expression,
+        )
 
         result = {"factor_name": factor_name, "symbol": symbol, "value": None}
         try:
             db = SessionLocal()
             try:
-                factor = db.query(CustomFactor).filter(
-                    CustomFactor.name == factor_name,
-                    CustomFactor.is_active == True
-                ).first()
+                factor = resolve_factor_definition(db, factor_name)
                 if not factor:
                     result["error"] = f"Factor '{factor_name}' not found"
                     return result
-                expression = factor.expression
             finally:
                 db.close()
 
@@ -132,11 +130,26 @@ class BacktestDataProvider:
                  "close": k.close, "volume": k.volume, "timestamp": k.timestamp}
                 for k in slice_klines
             ]
-            series, err = factor_expression_engine.execute(expression, kline_dicts)
-            if series is not None and len(series) > 0:
-                last_val = series.iloc[-1]
-                if not pd.isna(last_val):
-                    result["value"] = round(float(last_val), 6)
+            result["expression"] = extract_factor_expression(factor)
+            result["description"] = factor.get("description") or ""
+            result["category"] = factor.get("category")
+            result["id"] = factor.get("id")
+            db = SessionLocal()
+            try:
+                value, _, err = compute_factor_value(
+                    db=db,
+                    factor_name=factor_name,
+                    symbol=symbol,
+                    period="5m",
+                    exchange=self.exchange,
+                    klines=kline_dicts,
+                )
+            finally:
+                db.close()
+            if value is not None:
+                result["value"] = value
+            elif err:
+                result["error"] = err
         except Exception as e:
             result["error"] = str(e)
         return result

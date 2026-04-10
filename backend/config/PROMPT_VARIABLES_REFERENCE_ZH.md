@@ -40,10 +40,14 @@ summary: Real-time: opened ETH $50,000
 action: open
 direction: long
 notional_value: 50000.0
-closed_pnl: 0.0
-average_price: 2500.5
 start_position: 0.0
 end_position: 20.0
+entry_price: 2500.5
+leverage: 10
+unrealized_pnl: 420.0
+liquidation_price: 2100.0
+average_price: 2500.5
+closed_pnl: 0.0
 fills_count: 5
 ```
 
@@ -53,7 +57,9 @@ fills_count: 5
 - `tier`（在 summary 前缀中）："Real-time"（付费 WS 实时成交）或 "Polling"（快照对比）
 - `action`：open, close, add, reduce, flip, update（仅 position_change）
 - `direction`：long, short, flat（仅 position_change）
-- Polling 事件使用 `old_value`/`new_value` 而非基于 fills 的字段
+- 共享仓位字段：`start_position`、`end_position`、`old_value`、`new_value`、`notional_value`
+- 可用仓位上下文字段：`entry_price`、`leverage`、`unrealized_pnl`、`liquidation_price`
+- 仅实时聚合字段：`average_price`、`closed_pnl`、`fills_count`、`fills`
 
 当由**定时间隔**触发时：
 ```

@@ -160,6 +160,21 @@ def _get_market_prices(symbols: List[str]) -> Dict[str, float]:
     return prices
 
 
+def _get_realtime_ticker_snapshot(symbols: List[str], environment: str = "mainnet") -> Dict[str, Dict[str, Any]]:
+    """Get a realtime ticker snapshot for prompt generation and price alignment."""
+    from services.market_data import get_ticker_data
+
+    tickers: Dict[str, Dict[str, Any]] = {}
+    for symbol in symbols:
+        try:
+            ticker = get_ticker_data(symbol, "CRYPTO", environment)
+            if ticker and float(ticker.get("price", 0) or 0) > 0:
+                tickers[symbol] = ticker
+        except Exception as err:
+            logger.warning(f"Failed to get realtime ticker for {symbol}: {err}")
+    return tickers
+
+
 def _select_side(db: Session, account: Account, symbol: str, max_value: float) -> Optional[Tuple[str, int]]:
     """Select random trading side and quantity for legacy random trading"""
     market = "CRYPTO"
@@ -409,7 +424,22 @@ def place_ai_driven_hyperliquid_order(
         logger.info("No Hyperliquid watchlist configured, skipping Hyperliquid trading")
         return
 
-    prices = _get_market_prices(selected_symbols)
+    env_db = SessionLocal()
+    try:
+        from services.hyperliquid_environment import get_global_trading_mode
+        prompt_environment = get_global_trading_mode(env_db)
+    except Exception as err:
+        logger.warning(f"Failed to get global trading mode for ticker snapshot: {err}")
+        prompt_environment = "mainnet"
+    finally:
+        env_db.close()
+
+    realtime_tickers = _get_realtime_ticker_snapshot(selected_symbols, environment=prompt_environment)
+    prices = {
+        symbol: float(ticker.get("price", 0) or 0)
+        for symbol, ticker in realtime_tickers.items()
+        if float(ticker.get("price", 0) or 0) > 0
+    }
     if not prices:
         logger.info("Failed to fetch market prices, skipping Hyperliquid trading")
         return

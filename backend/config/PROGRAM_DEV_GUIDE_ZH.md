@@ -165,6 +165,61 @@ class RSI_CVD_Strategy:
 | `positions` | `Dict[str, Position]` | 当前持仓（以币种为键）|
 | `recent_trades` | `List[Trade]` | 最近平仓交易记录 |
 | `open_orders` | `List[Order]` | 当前开放订单（止盈止损、限价单）|
+| `signal_source_type` | `Optional[str]` | 钱包来源信号时为 `"wallet_tracking"`，否则为 `None` |
+| `wallet_event` | `Optional[Dict]` | 当 `signal_source_type == "wallet_tracking"` 时提供的钱包事件 payload |
+
+### 钱包信号触发上下文
+
+当 `data.signal_source_type == "wallet_tracking"` 时，策略可以从 `data.wallet_event` 读取钱包事件。
+
+钱包事件公共外层字段：
+- `address`
+- `event_type`
+- `event_level`
+- `tier`
+- `summary`
+- `detail`
+- `event_timestamp`
+
+统一后的 `position_change.detail` 字段：
+- `action`
+- `direction`
+- `start_position`
+- `end_position`
+- `old_value`
+- `new_value`
+- `notional_value`
+- `entry_price`
+- `leverage`
+- `unrealized_pnl`
+- `liquidation_price`
+
+仅实时聚合附加字段：
+- `fills_count`
+- `total_size`
+- `average_price`
+- `closed_pnl`
+- `fills`
+
+仅轮询快照附加字段：
+- `absolute_change`
+- `relative_change`
+- `current_position`
+- `previous_position`
+- `source_event_type`
+
+示例：
+```python
+if data.signal_source_type == "wallet_tracking" and data.wallet_event:
+    detail = data.wallet_event.get("detail", {})
+    action = detail.get("action")
+    direction = detail.get("direction")
+    notional = detail.get("notional_value", 0)
+    entry_price = detail.get("entry_price")
+
+    if data.wallet_event.get("event_type") == "position_change" and action == "open" and direction == "long":
+        ...
+```
 
 ### 定时触发 vs 信号触发（重要）
 

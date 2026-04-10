@@ -28,10 +28,12 @@ def compute_factor_snapshot(
       period-aware, 500 K-lines, same expression engine, same last-value rule.
     If this function changes, verify all three call sites together.
     """
-    from database.models import CustomFactor
-    from services.factor_expression_engine import factor_expression_engine
+    from services.factor_resolver import (
+        compute_factor_value,
+        resolve_factor_definition,
+        extract_factor_expression,
+    )
     from sqlalchemy import text as sa_text
-    import pandas as pd
 
     result = {
         "factor_name": factor_name,
@@ -40,27 +42,29 @@ def compute_factor_snapshot(
         "value": None,
     }
 
-    factor = db.query(CustomFactor).filter(
-        CustomFactor.name == factor_name,
-        CustomFactor.is_active == True
-    ).first()
+    factor = resolve_factor_definition(db, factor_name)
     if not factor:
         result["error"] = f"Factor '{factor_name}' not found"
         return result
 
-    result["id"] = factor.id
-    result["expression"] = factor.expression
-    result["description"] = factor.description or ""
-    result["category"] = factor.category
+    result["id"] = factor.get("id")
+    result["expression"] = extract_factor_expression(factor)
+    result["description"] = factor.get("description") or ""
+    result["category"] = factor.get("category")
 
     try:
         klines = klines_loader(period, 500)
         if klines and len(klines) >= 30:
-            series, err = factor_expression_engine.execute(factor.expression, klines)
-            if series is not None and len(series) > 0:
-                last_val = series.iloc[-1]
-                if not pd.isna(last_val):
-                    result["value"] = round(float(last_val), 6)
+            value, _, err = compute_factor_value(
+                db=db,
+                factor_name=factor_name,
+                symbol=symbol,
+                period=period,
+                exchange=exchange,
+                klines=klines,
+            )
+            if value is not None:
+                result["value"] = value
             elif err:
                 result["error"] = err
     except Exception as e:

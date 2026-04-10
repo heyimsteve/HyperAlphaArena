@@ -186,9 +186,20 @@ Common envelope fields (all event types):
 - `summary`: human-readable description (e.g. "Real-time: opened ETH $50,000")
 - `event_timestamp`: UTC milliseconds
 
-Realtime position_change detail (from aggregated fills):
+Unified position_change detail fields:
 - `action`: open, close, add, reduce, flip, update
 - `direction`: long, short, flat
+- `start_position`: position size before the action
+- `end_position`: position size after the action
+- `old_value`: previous position notional value in USD
+- `new_value`: current position notional value in USD
+- `notional_value`: normalized position notional reference in USD
+- `entry_price`: entry price when available
+- `leverage`: leverage when available
+- `unrealized_pnl`: unrealized PnL when available
+- `liquidation_price`: liquidation price when available
+
+Realtime position_change extra detail (from aggregated fills):
 - `start_position`: position size before fills
 - `end_position`: position size after fills
 - `total_size`: sum of absolute fill sizes
@@ -198,14 +209,13 @@ Realtime position_change detail (from aggregated fills):
 - `fills_count`: number of fills aggregated
 - `fills`: array of raw fill objects with coin, px, sz, dir, side, time, closedPnl
 
-Polling position_change detail (from snapshot comparison):
-- `action`: open, close, add, reduce, flip
-- `old_value`: previous position notional value
-- `new_value`: current position notional value
-- `previous_size`: previous position size (signed)
-- `current_size`: current position size (signed)
+Polling position_change extra detail (from snapshot comparison):
 - `absolute_change`: |new_value - old_value|
 - `relative_change`: absolute_change / |old_value|
+- `current_position`: normalized current position snapshot when available
+- `previous_position`: normalized previous position snapshot when available
+- `source_event_type`: open_position, increase_position, reduce_position, close_position, direction_reversal
+- Legacy compatibility fields may still appear in runtime payloads, but new logic should prefer the unified fields above
 
 Polling equity_change detail:
 - `old_equity`: previous total equity
@@ -215,7 +225,7 @@ Polling equity_change detail:
 
 Key differences between realtime and polling:
 - Realtime has full fill details (prices, sizes, PnL per fill)
-- Polling only has before/after snapshots (no individual fill data)
+- Polling uses before/after position snapshots (no individual fill data)
 - Realtime events have tier="realtime", polling events have tier="polling"
 - The summary prefix indicates the source: "Real-time:" vs "Polling:"
 
@@ -224,9 +234,8 @@ When writing a strategy that follows wallet signals:
 - Check `event_type == "position_change"` to filter for trading actions
 - Use `detail.action` to determine what the tracked wallet did (open/close/add/reduce/flip)
 - Use `detail.direction` to know the wallet's position direction after the action
-- Use `detail.notional_value` to gauge the trade size (realtime only)
-- Use `detail.average_price` as a reference price (realtime only)
-- For polling events, use `detail.new_value` and `detail.current_size` instead
+- Use `detail.notional_value` to gauge the normalized trade size
+- Use `detail.entry_price`, `detail.leverage`, `detail.unrealized_pnl`, and `detail.liquidation_price` when available
+- Use `detail.average_price` and `detail.fills` only when the event includes realtime fill aggregation
 - Always check `trigger_market_regime` is null for wallet signals (no local market context)
 - The strategy must fetch its own market data if price validation is needed
-

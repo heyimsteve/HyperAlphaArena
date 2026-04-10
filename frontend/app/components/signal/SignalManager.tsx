@@ -1901,6 +1901,10 @@ export default function SignalManager() {
                             ? formatWalletDirectionLabel(t, detail.direction)
                             : null
                           const notionalValue = formatWalletMetricValue(detail?.notional_value)
+                          const entryPrice = formatWalletMetricValue(detail?.entry_price, 4)
+                          const leverage = formatWalletMetricValue(detail?.leverage)
+                          const unrealizedPnl = formatWalletMetricValue(detail?.unrealized_pnl)
+                          const liquidationPrice = formatWalletMetricValue(detail?.liquidation_price, 4)
                           const closedPnl = formatWalletMetricValue(detail?.closed_pnl)
                           const averagePrice = formatWalletMetricValue(detail?.average_price, 4)
                           return (
@@ -1912,7 +1916,7 @@ export default function SignalManager() {
                                 {address && <span>{formatShortAddress(address)}</span>}
                               </div>
                               {summary && <div>{summary}</div>}
-                              {(action || direction || notionalValue || closedPnl || averagePrice) && (
+                              {(action || direction || notionalValue || entryPrice || leverage || unrealizedPnl || liquidationPrice || closedPnl || averagePrice) && (
                                 <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                                   {action && (
                                     <span>{t('signals.walletTracking.logAction', 'Action')}: <span className="text-foreground">{action}</span></span>
@@ -1922,6 +1926,18 @@ export default function SignalManager() {
                                   )}
                                   {notionalValue && (
                                     <span>{t('signals.walletTracking.logNotional', 'Notional')}: <span className="text-foreground">${notionalValue}</span></span>
+                                  )}
+                                  {entryPrice && (
+                                    <span>{t('signals.walletTracking.logEntryPrice', 'Entry Price')}: <span className="text-foreground">{entryPrice}</span></span>
+                                  )}
+                                  {leverage && (
+                                    <span>{t('signals.walletTracking.logLeverage', 'Leverage')}: <span className="text-foreground">{leverage}</span></span>
+                                  )}
+                                  {unrealizedPnl && (
+                                    <span>{t('signals.walletTracking.logUnrealizedPnl', 'Unrealized PnL')}: <span className="text-foreground">${unrealizedPnl}</span></span>
+                                  )}
+                                  {liquidationPrice && (
+                                    <span>{t('signals.walletTracking.logLiquidationPrice', 'Liquidation Price')}: <span className="text-foreground">{liquidationPrice}</span></span>
                                   )}
                                   {closedPnl && (
                                     <span>{t('signals.walletTracking.logClosedPnl', 'Closed PnL')}: <span className="text-foreground">${closedPnl}</span></span>

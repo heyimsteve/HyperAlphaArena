@@ -245,6 +245,43 @@ def _build_market_prices(
     return "\n".join(lines)
 
 
+def _get_realtime_ticker_snapshot(
+    symbols: List[str],
+    environment: str = "mainnet",
+    exchange: str = "hyperliquid",
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch a single realtime ticker snapshot for all symbols in this prompt build."""
+    from services.market_data import get_ticker_data
+
+    market_param = "binance" if exchange == "binance" else "CRYPTO"
+    snapshot: Dict[str, Dict[str, Any]] = {}
+
+    for symbol in symbols:
+        try:
+            ticker = get_ticker_data(symbol, market_param, environment)
+            if ticker and float(ticker.get("price", 0) or 0) > 0:
+                snapshot[symbol] = ticker
+        except Exception as err:
+            logger.warning(f"Failed to fetch realtime ticker for {symbol} ({exchange}/{environment}): {err}")
+
+    return snapshot
+
+
+def _format_market_data_block(symbol: str, ticker: Dict[str, Any]) -> str:
+    """Format {SYMBOL_market_data} from one ticker snapshot."""
+    market_data_lines = [
+        f"Symbol: {symbol}",
+        f"Price: ${ticker['price']:.2f}",
+        f"24h Change: {ticker['change24h']:+.2f} ({ticker['percentage24h']:+.2f}%)",
+        f"24h Volume: ${ticker['volume24h']:,.0f}",
+    ]
+    if 'open_interest' in ticker:
+        market_data_lines.append(f"Open Interest: ${ticker['open_interest']:,.0f}")
+    if 'funding_rate' in ticker:
+        market_data_lines.append(f"Funding Rate: {ticker['funding_rate'] * 100:.4f}%")
+    return "\n".join(market_data_lines)
+
+
 def _normalize_symbol_metadata(
     symbol_metadata: Optional[Dict[str, Any]],
     fallback_symbols: List[str],
@@ -671,9 +708,19 @@ def _build_prompt_context(
 
     now = datetime.utcnow()
 
+    realtime_tickers = _get_realtime_ticker_snapshot(ordered_symbols, environment=environment, exchange=exchange)
+    effective_prices: Dict[str, float] = dict(prices or {})
+    for symbol, ticker in realtime_tickers.items():
+        try:
+            ticker_price = float((ticker or {}).get("price", 0) or 0)
+        except (TypeError, ValueError):
+            ticker_price = 0.0
+        if ticker_price > 0:
+            effective_prices[symbol.upper()] = ticker_price
+
     # Legacy format variables (for backward compatibility with existing templates)
     account_state = _build_account_state(portfolio)
-    market_snapshot = _build_market_snapshot(prices, positions, ordered_symbols)
+    market_snapshot = _build_market_snapshot(effective_prices, positions, ordered_symbols)
     session_context = _build_session_context(account)
     sampling_data = _build_sampling_data(samples, target_symbol, sampling_interval)
 
@@ -684,7 +731,7 @@ def _build_prompt_context(
     available_cash = _format_currency(portfolio.get('cash'))
     total_account_value = _format_currency(portfolio.get('total_assets'))
     holdings_detail = _build_holdings_detail(positions)
-    market_prices = _build_market_prices(prices, ordered_symbols, symbol_display_map)
+    market_prices = _build_market_prices(effective_prices, ordered_symbols, symbol_display_map)
     # Legacy format (kept for backward compatibility with old templates)
     output_format_legacy = OUTPUT_FORMAT_JSON.replace(SYMBOL_PLACEHOLDER, output_symbol_choices or "SYMBOL")
 
@@ -792,7 +839,8 @@ def _build_prompt_context(
                 margin_used = float(pos.get('margin_used', 0))
                 position_value = float(pos.get('position_value', 0))
                 roe = float(pos.get('return_on_equity', 0))
-                funding_total = float(pos.get('cum_funding_all_time', 0))
+                funding_since_open = float(pos.get('cum_funding_since_open', 0) or 0)
+                net_pnl = unrealized_pnl + funding_since_open
                 liquidation_px = float(pos.get('liquidation_px', 0))
                 leverage_type = pos.get('leverage_type', 'cross') or 'cross'
 
@@ -801,12 +849,13 @@ def _build_prompt_context(
                 holding_duration_str = pos.get('holding_duration_str')
 
                 # Get current market price for this symbol
-                current_price = prices.get(symbol, entry_px)
+                current_price = effective_prices.get(symbol, entry_px)
 
                 # Format values
                 pnl_str = f"+${unrealized_pnl:,.2f}" if unrealized_pnl >= 0 else f"-${abs(unrealized_pnl):,.2f}"
                 roe_str = f"+{roe:.2f}%" if roe >= 0 else f"{roe:.2f}%"
-                funding_str = f"+${funding_total:.4f}" if funding_total >= 0 else f"-${abs(funding_total):.4f}"
+                funding_str = f"+${funding_since_open:.4f}" if funding_since_open >= 0 else f"-${abs(funding_since_open):.4f}"
+                net_pnl_str = f"+${net_pnl:,.2f}" if net_pnl >= 0 else f"-${abs(net_pnl):,.2f}"
                 leverage_type_str = leverage_type.capitalize()
 
                 # Calculate distance to liquidation
@@ -826,9 +875,10 @@ def _build_prompt_context(
                     f"- {symbol}: {direction} {abs_size:.4f} units @ ${entry_px:,.2f} avg\n"
                     f"{timing_line}"
                     f"  Mark price: ${current_price:,.2f} | Position value: ${position_value:,.2f}\n"
-                    f"  Unrealized P&L: {pnl_str} ({roe_str} ROE)\n"
+                    f"  Unrealized P&L (exchange): {pnl_str} ({roe_str} ROE)\n"
+                    f"  Funding Since Open: {funding_str} | Net P&L: {net_pnl_str}\n"
                     f"  Leverage: {leverage:.0f}x {leverage_type_str} (max {position_max_leverage:.0f}x) | Margin: ${margin_used:,.2f}\n"
-                    f"  Liquidation: ${liquidation_px:,.2f} ({liq_distance_pct:.1f}% away){liq_warning} | Funding: {funding_str}"
+                    f"  Liquidation: ${liquidation_px:,.2f} ({liq_distance_pct:.1f}% away){liq_warning}"
                 )
             positions_detail = "\n".join(pos_lines)
         else:
@@ -961,10 +1011,32 @@ def _build_prompt_context(
             from database.connection import SessionLocal
             variable_groups = _parse_kline_indicator_variables(template_text)
             if variable_groups:
-                with SessionLocal() as db:
-                    kline_context = _build_klines_and_indicators_context(
-                        variable_groups, db, environment, exchange
-                    )
+                # Reuse the same realtime ticker snapshot for {SYMBOL_market_data}
+                # so market_prices, positions_detail, and market_data stay aligned.
+                market_data_groups = {}
+                non_market_groups = {}
+                for key, requirements in variable_groups.items():
+                    symbol, period = key
+                    if period is None and requirements.get("market_data"):
+                        market_data_groups[key] = requirements
+                    else:
+                        non_market_groups[key] = requirements
+
+                for (symbol, _period), _requirements in market_data_groups.items():
+                    ticker = realtime_tickers.get(symbol)
+                    if ticker:
+                        kline_context[f"{symbol}_market_data"] = _format_market_data_block(symbol, ticker)
+
+                if non_market_groups:
+                    with SessionLocal() as db:
+                        kline_context.update(
+                            _build_klines_and_indicators_context(
+                                non_market_groups,
+                                db,
+                                environment,
+                                exchange,
+                            )
+                        )
                 logger.debug(f"Built K-line context with {len(kline_context)} variables")
         except Exception as e:
             logger.warning(f"Failed to build K-line context: {e}", exc_info=True)
@@ -1106,6 +1178,18 @@ def _build_prompt_context(
                     lines.append(f"direction: {detail.get('direction')}")
                 if detail.get("notional_value") is not None:
                     lines.append(f"notional_value: {detail.get('notional_value')}")
+                if detail.get("entry_price") is not None:
+                    lines.append(f"entry_price: {detail.get('entry_price')}")
+                if detail.get("leverage") is not None:
+                    lines.append(f"leverage: {detail.get('leverage')}")
+                if detail.get("unrealized_pnl") is not None:
+                    lines.append(f"unrealized_pnl: {detail.get('unrealized_pnl')}")
+                if detail.get("liquidation_price") is not None:
+                    lines.append(f"liquidation_price: {detail.get('liquidation_price')}")
+                if detail.get("old_value") is not None:
+                    lines.append(f"old_value: {detail.get('old_value')}")
+                if detail.get("new_value") is not None:
+                    lines.append(f"new_value: {detail.get('new_value')}")
                 if detail.get("closed_pnl") is not None:
                     lines.append(f"closed_pnl: {detail.get('closed_pnl')}")
                 if detail.get("average_price") is not None:
@@ -1267,7 +1351,7 @@ Regime Types:
         "sampling_data": sampling_data,
         "decision_task": DECISION_TASK_TEXT,
         "output_format": output_format,
-        "prices_json": json.dumps(prices, indent=2, sort_keys=True),
+        "prices_json": json.dumps(effective_prices, indent=2, sort_keys=True),
         "portfolio_json": json.dumps(portfolio, indent=2, sort_keys=True),
         "portfolio_positions_json": json.dumps(positions, indent=2, sort_keys=True),
         "news_section": news_section,
@@ -3191,7 +3275,7 @@ def _build_klines_and_indicators_context(
     variable_groups: Dict[str, Dict[str, Any]],
     db: Session,
     environment: str = "mainnet",
-    exchange: str = "hyperliquid"
+    exchange: str = "hyperliquid",
 ) -> Dict[str, str]:
     """
     Build K-line and indicator context for prompt filling.
@@ -3216,7 +3300,13 @@ def _build_klines_and_indicators_context(
     # If only one group, process directly without threading overhead
     if len(variable_groups) <= 1:
         for (symbol, period), requirements in variable_groups.items():
-            result = _process_single_symbol_period(symbol, period, requirements, environment, exchange)
+            result = _process_single_symbol_period(
+                symbol,
+                period,
+                requirements,
+                environment,
+                exchange,
+            )
             context.update(result)
         logger.info(f"Built context with {len(context)} variables for environment: {environment}")
         return context
@@ -3258,7 +3348,7 @@ def _process_single_symbol_period(
     period: Optional[str],
     requirements: Dict[str, Any],
     environment: str,
-    exchange: str = "hyperliquid"
+    exchange: str = "hyperliquid",
 ) -> Dict[str, str]:
     """
     Process a single (symbol, period) combination and return context variables.
@@ -3277,8 +3367,6 @@ def _process_single_symbol_period(
         Dict mapping variable names to formatted strings
     """
     from services.market_data import get_kline_data, get_ticker_data
-    from services.technical_indicators import calculate_indicators
-    from services.kline_ai_analysis_service import _format_klines_summary
 
     context = {}
     # Determine market parameter based on exchange
@@ -3291,19 +3379,8 @@ def _process_single_symbol_period(
             try:
                 ticker = get_ticker_data(symbol, market_param, environment)
                 if ticker:
-                    market_data_lines = [
-                        f"Symbol: {symbol}",
-                        f"Price: ${ticker['price']:.2f}",
-                        f"24h Change: {ticker['change24h']:+.2f} ({ticker['percentage24h']:+.2f}%)",
-                        f"24h Volume: ${ticker['volume24h']:,.0f}",
-                    ]
-                    if 'open_interest' in ticker:
-                        market_data_lines.append(f"Open Interest: ${ticker['open_interest']:,.0f}")
-                    if 'funding_rate' in ticker:
-                        market_data_lines.append(f"Funding Rate: {ticker['funding_rate'] * 100:.4f}%")
-
                     var_name = f"{symbol}_market_data"
-                    context[var_name] = "\n".join(market_data_lines)
+                    context[var_name] = _format_market_data_block(symbol, ticker)
                     logger.debug(f"Added market data variable: {var_name}")
             except Exception as ticker_err:
                 logger.warning(f"Failed to get ticker data for {symbol}: {ticker_err}")
@@ -3311,6 +3388,8 @@ def _process_single_symbol_period(
 
         # Process K-lines and indicators (has period)
         logger.info(f"Processing {symbol} {period} for environment: {environment} (exchange: {exchange})")
+        from services.technical_indicators import calculate_indicators
+        from services.kline_ai_analysis_service import _format_klines_summary
 
         # Always fetch 500 candles for accurate indicator calculation
         # Skip persistence for prompt generation (real-time data only, no DB write overhead)

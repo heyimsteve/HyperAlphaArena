@@ -172,6 +172,61 @@ The `MarketData` object provides access to market data and account information.
 | `positions` | `Dict[str, Position]` | Current open positions (keyed by symbol) |
 | `recent_trades` | `List[Trade]` | Recent closed trades history |
 | `open_orders` | `List[Order]` | Current open orders (TP/SL, limit orders) |
+| `signal_source_type` | `Optional[str]` | `"wallet_tracking"` for wallet-origin signals, otherwise `None` |
+| `wallet_event` | `Optional[Dict]` | Wallet event payload when `signal_source_type == "wallet_tracking"` |
+
+### Wallet Signal Trigger Context
+
+When `data.signal_source_type == "wallet_tracking"`, the strategy receives a wallet event in `data.wallet_event`.
+
+Common wallet event envelope:
+- `address`
+- `event_type`
+- `event_level`
+- `tier`
+- `summary`
+- `detail`
+- `event_timestamp`
+
+Unified `position_change` detail fields:
+- `action`
+- `direction`
+- `start_position`
+- `end_position`
+- `old_value`
+- `new_value`
+- `notional_value`
+- `entry_price`
+- `leverage`
+- `unrealized_pnl`
+- `liquidation_price`
+
+Realtime-only extra fields:
+- `fills_count`
+- `total_size`
+- `average_price`
+- `closed_pnl`
+- `fills`
+
+Polling-only extra fields:
+- `absolute_change`
+- `relative_change`
+- `current_position`
+- `previous_position`
+- `source_event_type`
+
+Example:
+```python
+if data.signal_source_type == "wallet_tracking" and data.wallet_event:
+    detail = data.wallet_event.get("detail", {})
+    action = detail.get("action")
+    direction = detail.get("direction")
+    notional = detail.get("notional_value", 0)
+    entry_price = detail.get("entry_price")
+
+    if data.wallet_event.get("event_type") == "position_change" and action == "open" and direction == "long":
+        ...
+```
 
 ### Scheduled vs Signal Trigger (IMPORTANT)
 

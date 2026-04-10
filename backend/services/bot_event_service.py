@@ -151,6 +151,10 @@ def _format_event_message(event_type: str, data: Dict[str, Any]) -> str:
             action = _wallet_action_label(detail.get("action"))
             direction = _wallet_direction_label(detail.get("direction"))
             notional_value = _format_money(detail.get("notional_value"))
+            entry_price = _format_price(detail.get("entry_price"))
+            leverage = detail.get("leverage")
+            unrealized_pnl = _format_money(detail.get("unrealized_pnl"))
+            liquidation_price = _format_price(detail.get("liquidation_price"))
             closed_pnl = _format_money(detail.get("closed_pnl"))
             average_price = _format_price(detail.get("average_price"))
 
@@ -168,6 +172,14 @@ def _format_event_message(event_type: str, data: Dict[str, Any]) -> str:
             extra_lines.append(f"Symbol: {symbol}")
             if notional_value:
                 extra_lines.append(f"Notional: {notional_value}")
+            if entry_price:
+                extra_lines.append(f"Entry Price: {entry_price}")
+            if leverage is not None:
+                extra_lines.append(f"Leverage: {leverage}")
+            if unrealized_pnl:
+                extra_lines.append(f"Unrealized PnL: {unrealized_pnl}")
+            if liquidation_price:
+                extra_lines.append(f"Liquidation Price: {liquidation_price}")
             if closed_pnl:
                 extra_lines.append(f"Realized PnL: {closed_pnl}")
             if average_price:

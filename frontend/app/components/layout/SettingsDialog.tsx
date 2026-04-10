@@ -300,7 +300,7 @@ export default function SettingsDialog({ open, onOpenChange, onAccountUpdated, e
           } else if (err?.code === 4001) {
             toast.error(t('wallet.error.userRejected', 'Authorization rejected by user.'))
           } else {
-            toast.error(t('wallet.builder.failed', 'Authorization failed. You must complete trading authorization to start trading.'))
+            toast.error(t('wallet.error.authorizationFailedWrongAccount', 'Authorization failed. Please check that your wallet is switched to the correct account, then try again.'))
           }
           setToggleLoadingId(null)
           return

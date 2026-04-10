@@ -349,7 +349,7 @@ ACCOUNT_VARIABLES = {
 def _execute_preview_prompt(args: Dict[str, Any], request_id: str) -> str:
     """Execute preview_prompt tool - render prompt with real market data."""
     from services.ai_decision_service import _build_prompt_context, SafeDict
-    from services.market_data import get_last_price
+    from services.market_data import get_ticker_data
     from datetime import datetime, timezone
 
     prompt_text = args.get("prompt_text", "")
@@ -401,10 +401,14 @@ def _execute_preview_prompt(args: Dict[str, Any], request_id: str) -> str:
                 if sym not in symbols_to_fetch and sym in symbol_map:
                     symbols_to_fetch.append(sym)
 
+        realtime_tickers = {}
+
         # Fetch market data for each symbol
         for sym in symbols_to_fetch[:5]:  # Limit to 5 symbols
             try:
-                price = get_last_price(sym, "CRYPTO", environment="mainnet")
+                ticker = get_ticker_data(sym, "CRYPTO", environment="mainnet")
+                realtime_tickers[sym] = ticker
+                price = float(ticker.get("price", 0) or 0)
                 context[f"{sym}_market_data"] = f"Symbol: {sym}, Price: ${price:,.2f}"
 
                 # Get sampling data if available
@@ -430,7 +434,11 @@ def _execute_preview_prompt(args: Dict[str, Any], request_id: str) -> str:
             name = "Preview"
 
         minimal_portfolio = {'cash': 0, 'positions': {}, 'total_assets': 0}
-        prices = {asset: get_last_price(asset, "CRYPTO", environment="mainnet")}
+        prices = {
+            sym: float(ticker.get("price", 0) or 0)
+            for sym, ticker in locals().get("realtime_tickers", {}).items()
+            if float(ticker.get("price", 0) or 0) > 0
+        }
 
         full_context = _build_prompt_context(
             MinimalAccount(),

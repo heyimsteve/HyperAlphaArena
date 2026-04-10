@@ -40,10 +40,14 @@ summary: Real-time: opened ETH $50,000
 action: open
 direction: long
 notional_value: 50000.0
-closed_pnl: 0.0
-average_price: 2500.5
 start_position: 0.0
 end_position: 20.0
+entry_price: 2500.5
+leverage: 10
+unrealized_pnl: 420.0
+liquidation_price: 2100.0
+average_price: 2500.5
+closed_pnl: 0.0
 fills_count: 5
 ```
 
@@ -53,7 +57,9 @@ Wallet signal fields:
 - `tier` (in summary prefix): "Real-time" (paid WS fills) or "Polling" (snapshot diff)
 - `action`: open, close, add, reduce, flip, update (position_change only)
 - `direction`: long, short, flat (position_change only)
-- Polling events use `old_value`/`new_value` instead of fills-based fields
+- Shared position fields: `start_position`, `end_position`, `old_value`, `new_value`, `notional_value`
+- Position context when available: `entry_price`, `leverage`, `unrealized_pnl`, `liquidation_price`
+- Realtime-only fields: `average_price`, `closed_pnl`, `fills_count`, `fills`
 
 When triggered by **scheduled interval**:
 ```

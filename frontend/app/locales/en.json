@@ -528,6 +528,10 @@
       "logAction": "Action",
       "logDirection": "Direction",
       "logNotional": "Notional",
+      "logEntryPrice": "Entry Price",
+      "logLeverage": "Leverage",
+      "logUnrealizedPnl": "Unrealized PnL",
+      "logLiquidationPrice": "Liquidation Price",
       "logClosedPnl": "Closed PnL",
       "logAveragePrice": "Avg Price",
       "noneSelected": "None selected",
@@ -1152,6 +1156,7 @@
     "error": {
       "noWallet": "No browser wallet detected. Please install MetaMask, Rabby, or another wallet extension.",
       "noAccount": "No account selected in wallet. Please unlock your wallet and try again.",
+      "authorizationFailedWrongAccount": "Authorization failed. Please check that your wallet is switched to the correct account, then try again.",
       "notDepositedTestnet": "This wallet has not deposited on Hyperliquid Testnet. Please visit app.hyperliquid-testnet.xyz and deposit test USDC first.",
       "notDepositedMainnet": "This wallet has not deposited on Hyperliquid. Please visit app.hyperliquid.xyz and deposit USDC first.",
       "setupFailed": "Wallet setup failed. Please try again."

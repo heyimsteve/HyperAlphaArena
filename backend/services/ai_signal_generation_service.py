@@ -1064,17 +1064,11 @@ def _tool_get_indicators_batch(
         if indicator.startswith("factor:"):
             factor_name = indicator.split(":", 1)[1]
             try:
-                from database.models import CustomFactor
-                from services.factor_expression_engine import factor_expression_engine
                 from services.market_data import get_kline_data
-                import pandas as pd
-
-                factor = db.query(CustomFactor).filter(
-                    CustomFactor.name == factor_name, CustomFactor.is_active == True
-                ).first()
-                if not factor:
-                    results["indicators"][indicator] = {"error": f"Factor '{factor_name}' not found"}
-                    continue
+                from services.factor_resolver import (
+                    compute_factor_series,
+                    extract_factor_expression,
+                )
 
                 market = "binance" if exchange == "binance" else "CRYPTO"
                 klines = get_kline_data(symbol.upper(), market=market, period=time_window, count=500)
@@ -1082,9 +1076,16 @@ def _tool_get_indicators_batch(
                     results["indicators"][indicator] = {"error": "Insufficient K-line data"}
                     continue
 
-                series, err = factor_expression_engine.execute(factor.expression, klines)
+                series, factor, err = compute_factor_series(
+                    db=db,
+                    factor_name=factor_name,
+                    symbol=symbol.upper(),
+                    period=time_window,
+                    exchange=exchange,
+                    klines=klines,
+                )
                 if series is None or len(series) == 0:
-                    results["indicators"][indicator] = {"error": f"Expression error: {err}"}
+                    results["indicators"][indicator] = {"error": err or "Factor computation failed"}
                     continue
 
                 values = series.dropna().astype(float).tolist()
@@ -1095,7 +1096,7 @@ def _tool_get_indicators_batch(
                 arr = np.array(values)
                 factor_info = {
                     "type": "factor",
-                    "expression": factor.expression,
+                    "expression": extract_factor_expression(factor or {"name": factor_name}),
                     "data_points": len(values),
                     "min": float(np.min(arr)),
                     "max": float(np.max(arr)),
@@ -1450,9 +1451,8 @@ def _find_factor_signal_triggers(
 ) -> List[int]:
     """Find factor signal trigger timestamps using K-line data and edge detection."""
     import pandas as pd
-    from database.models import CustomFactor
-    from services.factor_expression_engine import factor_expression_engine
     from sqlalchemy import text
+    from services.factor_resolver import compute_factor_series
 
     metric = sig.get("indicator", "")
     factor_name = metric.split(":", 1)[1] if ":" in metric else metric
@@ -1462,12 +1462,6 @@ def _find_factor_signal_triggers(
 
     if not all([operator, threshold is not None]):
         return {"error": f"Factor signal missing operator/threshold"}
-
-    factor = db.query(CustomFactor).filter(
-        CustomFactor.name == factor_name, CustomFactor.is_active == True
-    ).first()
-    if not factor:
-        return {"error": f"Factor '{factor_name}' not found"}
 
     # Load K-lines for time range + warm-up
     from services.signal_backtest_service import TIMEFRAME_MS
@@ -1482,9 +1476,16 @@ def _find_factor_signal_triggers(
     if len(klines) < 30:
         return {"error": f"Insufficient K-line data for factor {factor_name}"}
 
-    series, err = factor_expression_engine.execute(factor.expression, klines)
+    series, _, err = compute_factor_series(
+        db=db,
+        factor_name=factor_name,
+        symbol=symbol,
+        period=tw,
+        exchange=exchange,
+        klines=klines,
+    )
     if series is None or len(series) == 0:
-        return {"error": f"Factor expression error: {err}"}
+        return {"error": err or f"Factor {factor_name} computation failed"}
 
     # Iterate with edge detection
     triggers = []

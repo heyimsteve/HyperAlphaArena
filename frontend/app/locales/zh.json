@@ -420,6 +420,10 @@
       "logAction": "动作",
       "logDirection": "方向",
       "logNotional": "名义价值",
+      "logEntryPrice": "开仓价",
+      "logLeverage": "杠杆",
+      "logUnrealizedPnl": "未实现盈亏",
+      "logLiquidationPrice": "强平价",
       "logClosedPnl": "已实现盈亏",
       "logAveragePrice": "均价",
       "noneSelected": "未选择",
@@ -1172,6 +1176,7 @@
     "error": {
       "noWallet": "未检测到浏览器钱包，请安装 MetaMask、Rabby 等钱包扩展。",
       "noAccount": "钱包中未选择账户，请先解锁钱包后重试。",
+      "authorizationFailedWrongAccount": "授权失败。请确认你当前钱包已切换到正确的账户，然后再重试。",
       "notDepositedTestnet": "该钱包尚未在 Hyperliquid 测试网充值。请先访问 app.hyperliquid-testnet.xyz 充值测试 USDC。",
       "notDepositedMainnet": "该钱包尚未在 Hyperliquid 充值。请先访问 app.hyperliquid.xyz 充值 USDC。",
       "setupFailed": "钱包设置失败，请重试。"

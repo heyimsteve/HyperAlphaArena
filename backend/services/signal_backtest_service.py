@@ -400,8 +400,7 @@ class SignalBacktestService:
         2. Run expression engine once on the full series
         3. Iterate each K-line close timestamp with edge detection
         """
-        from database.models import CustomFactor
-        from services.factor_expression_engine import factor_expression_engine
+        from services.factor_resolver import compute_factor_series
         import pandas as pd
 
         condition = signal_def.get("trigger_condition", {})
@@ -411,15 +410,6 @@ class SignalBacktestService:
         factor_name = metric.split(":", 1)[1] if ":" in metric else metric
 
         if not all([operator, threshold is not None]):
-            return []
-
-        # Look up factor expression
-        factor = db.query(CustomFactor).filter(
-            CustomFactor.name == factor_name,
-            CustomFactor.is_active == True
-        ).first()
-        if not factor:
-            logger.warning(f"[Backtest] Factor not found: {factor_name}")
             return []
 
         # Load K-lines for backtest range with 200-bar warm-up
@@ -438,8 +428,15 @@ class SignalBacktestService:
             logger.warning(f"[Backtest] Insufficient K-line data for factor {factor_name}: {len(klines)} bars")
             return []
 
-        # Run expression engine once on full series
-        series, err = factor_expression_engine.execute(factor.expression, klines)
+        # Run factor computation once on full series
+        series, _, err = compute_factor_series(
+            db=db,
+            factor_name=factor_name,
+            symbol=symbol,
+            period=time_window,
+            exchange=exchange,
+            klines=klines,
+        )
         if series is None or len(series) == 0:
             logger.warning(f"[Backtest] Factor {factor_name} execution failed: {err}")
             return []
@@ -494,8 +491,7 @@ class SignalBacktestService:
             - conditions_dict: {ts_ms: (condition_met, value_info)}
               The condition persists until the next K-line close.
         """
-        from database.models import CustomFactor
-        from services.factor_expression_engine import factor_expression_engine
+        from services.factor_resolver import compute_factor_series
         from services.factor_data_provider import get_klines_from_db
         import pandas as pd
 
@@ -507,12 +503,6 @@ class SignalBacktestService:
         factor_name = metric.split(":", 1)[1] if ":" in metric else metric
 
         if not all([operator, threshold is not None]):
-            return ([], {})
-
-        factor = db.query(CustomFactor).filter(
-            CustomFactor.name == factor_name, CustomFactor.is_active == True
-        ).first()
-        if not factor:
             return ([], {})
 
         interval_ms = TIMEFRAME_MS.get(time_window, 3600000)
@@ -527,7 +517,14 @@ class SignalBacktestService:
         if len(klines) < 30:
             return ([], {})
 
-        series, err = factor_expression_engine.execute(factor.expression, klines)
+        series, _, err = compute_factor_series(
+            db=db,
+            factor_name=factor_name,
+            symbol=symbol,
+            period=time_window,
+            exchange=exchange,
+            klines=klines,
+        )
         if series is None or len(series) == 0:
             return ([], {})
 

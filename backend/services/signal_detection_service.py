@@ -616,46 +616,40 @@ class SignalDetectionService:
         factor_name = metric.split(":", 1)[1]
         try:
             from database.connection import SessionLocal
-            from database.models import CustomFactor
-            from services.factor_expression_engine import factor_expression_engine
             from services.market_data import get_kline_data
+            from services.factor_resolver import compute_factor_series
 
-            # Look up factor expression from DB
             db = SessionLocal()
             try:
-                factor = db.query(CustomFactor).filter(
-                    CustomFactor.name == factor_name,
-                    CustomFactor.is_active == True
-                ).first()
-                if not factor:
-                    logger.warning(f"Factor not found: {factor_name}")
+                market = "binance" if exchange == "binance" else "CRYPTO"
+                klines = get_kline_data(symbol, market=market, period=period, count=300)
+                if not klines or len(klines) < 30:
+                    logger.warning(f"Insufficient K-line data for factor {factor_name}: {symbol}")
                     return None
-                expression = factor.expression
+
+                series, _, err = compute_factor_series(
+                    db=db,
+                    factor_name=factor_name,
+                    symbol=symbol,
+                    period=period,
+                    exchange=exchange,
+                    klines=klines,
+                )
+                if series is None or len(series) == 0:
+                    logger.warning(f"Factor {factor_name} execution failed: {err}")
+                    return None
+
+                import pandas as pd
+                last_val = series.iloc[-1]
+                if pd.isna(last_val):
+                    return None
+
+                value = float(last_val)
+                print(f"[FactorMetric] symbol={symbol} factor={factor_name} exchange={exchange} "
+                      f"period={period} value={value:.6f}", flush=True)
+                return value
             finally:
                 db.close()
-
-            # Load closed K-lines (use period as K-line interval)
-            market = "binance" if exchange == "binance" else "CRYPTO"
-            klines = get_kline_data(symbol, market=market, period=period, count=300)
-            if not klines or len(klines) < 30:
-                logger.warning(f"Insufficient K-line data for factor {factor_name}: {symbol}")
-                return None
-
-            # Execute expression engine
-            series, err = factor_expression_engine.execute(expression, klines)
-            if series is None or len(series) == 0:
-                logger.warning(f"Factor {factor_name} execution failed: {err}")
-                return None
-
-            import pandas as pd
-            last_val = series.iloc[-1]
-            if pd.isna(last_val):
-                return None
-
-            value = float(last_val)
-            print(f"[FactorMetric] symbol={symbol} factor={factor_name} exchange={exchange} "
-                  f"period={period} value={value:.6f}", flush=True)
-            return value
 
         except Exception as e:
             logger.error(f"Error computing factor metric {factor_name} for {symbol}: {e}")
