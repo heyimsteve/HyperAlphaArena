@@ -1951,7 +1951,7 @@ You are creating a new program. Start fresh and design the strategy based on use
                 yield format_sse_event("error", {"content": "Invalid API configuration"})
                 return
         # Use unified headers builder (see build_llm_headers in ai_decision_service)
-        headers = build_llm_headers(api_format, api_config["api_key"])
+        headers = build_llm_headers(api_format, api_config["api_key"], api_config["base_url"])
 
         # Tool calling loop
         max_rounds = 15

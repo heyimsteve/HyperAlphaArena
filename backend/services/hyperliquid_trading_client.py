@@ -43,6 +43,7 @@ from services.hyperliquid_cache import (
     update_account_state_cache,
     update_positions_cache,
 )
+from services.exchanges.symbol_mapper import SymbolMapper
 
 getcontext().prec = 28
 
@@ -206,24 +207,43 @@ class HyperliquidTradingClient:
             # Create eth_account wallet for SDK
             self.eth_wallet = EthAccount.from_key(private_key)
 
-            # Initialize SDK Exchange
-            # account_address = query_address (master wallet for agent mode, same as wallet for legacy)
-            # Only pass empty spot_meta to skip spot token parsing (testnet has inconsistent spot data)
-            # Do NOT pass empty meta — perp metadata must load for coin_to_asset mappings
-            self.sdk_exchange = Exchange(
-                wallet=self.eth_wallet,
-                base_url=self.api_url,
-                account_address=self.query_address,
-                spot_meta={"tokens": [], "universe": []},
-            )
-
-            # Initialize SDK Info (for querying user state, fills, and historical orders)
-            # Only pass empty spot_meta to skip spot token parsing (testnet has inconsistent spot data)
-            self.sdk_info = Info(
-                base_url=self.api_url,
-                skip_ws=True,
-                spot_meta={"tokens": [], "universe": []},
-            )
+            try:
+                # Include HIP-3 metadata, but do not let that optional metadata block
+                # standard perp trading if the xyz DEX metadata fetch fails.
+                self.sdk_exchange = Exchange(
+                    wallet=self.eth_wallet,
+                    base_url=self.api_url,
+                    account_address=self.query_address,
+                    spot_meta={"tokens": [], "universe": []},
+                    perp_dexs=['', 'xyz'],
+                )
+                self.sdk_info = Info(
+                    base_url=self.api_url,
+                    skip_ws=True,
+                    spot_meta={"tokens": [], "universe": []},
+                    perp_dexs=['', 'xyz'],
+                )
+                self.hip3_sdk_enabled = True
+            except Exception as hip3_err:
+                logger.warning(
+                    "Failed to load HIP-3 metadata for Hyperliquid SDK; "
+                    "falling back to standard perps only: %s",
+                    hip3_err,
+                )
+                self.sdk_exchange = Exchange(
+                    wallet=self.eth_wallet,
+                    base_url=self.api_url,
+                    account_address=self.query_address,
+                    spot_meta={"tokens": [], "universe": []},
+                    perp_dexs=[''],
+                )
+                self.sdk_info = Info(
+                    base_url=self.api_url,
+                    skip_ws=True,
+                    spot_meta={"tokens": [], "universe": []},
+                    perp_dexs=[''],
+                )
+                self.hip3_sdk_enabled = False
 
             logger.info(
                 f"Official SDK Exchange + Info initialized: account_id={account_id} "
@@ -232,6 +252,47 @@ class HyperliquidTradingClient:
         except Exception as e:
             logger.error(f"Failed to initialize Hyperliquid SDK: {e}")
             raise
+
+    def _get_exchange_symbol(self, symbol: str) -> str:
+        return SymbolMapper.to_exchange(symbol, "hyperliquid")
+
+    def _hip3_trade_error(self, symbol: str) -> Optional[str]:
+        if not SymbolMapper.is_hip3_symbol(symbol):
+            return None
+        if self.environment == "testnet":
+            return f"HIP-3 symbol {symbol} trading is currently only supported on mainnet"
+        if not getattr(self, "hip3_sdk_enabled", False):
+            return f"HIP-3 metadata unavailable; cannot trade {symbol}"
+        return None
+
+    def _fetch_user_state_with_hip3(self) -> Dict[str, Any]:
+        """Fetch standard user state and append HIP-3 positions when available."""
+        user_state = self.sdk_info.user_state(self.query_address)
+        if not getattr(self, "hip3_sdk_enabled", False):
+            return user_state
+        try:
+            hip3_state = self.sdk_info.user_state(self.query_address, dex="xyz")
+            hip3_positions = hip3_state.get("assetPositions", []) if isinstance(hip3_state, dict) else []
+            if hip3_positions:
+                merged = dict(user_state)
+                merged["assetPositions"] = list(user_state.get("assetPositions", [])) + hip3_positions
+                return merged
+        except Exception as hip3_err:
+            logger.warning("Failed to fetch HIP-3 user state, using standard state only: %s", hip3_err)
+        return user_state
+
+    def _fetch_frontend_open_orders_with_hip3(self) -> List[Dict[str, Any]]:
+        """Fetch standard open orders and append HIP-3 open orders when available."""
+        open_orders = list(self.sdk_info.frontend_open_orders(self.query_address))
+        if not getattr(self, "hip3_sdk_enabled", False):
+            return open_orders
+        try:
+            hip3_orders = self.sdk_info.frontend_open_orders(self.query_address, dex="xyz")
+            if hip3_orders:
+                open_orders.extend(hip3_orders)
+        except Exception as hip3_err:
+            logger.warning("Failed to fetch HIP-3 open orders, using standard orders only: %s", hip3_err)
+        return open_orders
 
     def _disable_hip3_markets(self) -> None:
         """Ensure HIP3 market fetching is disabled in ccxt."""
@@ -472,7 +533,7 @@ class HyperliquidTradingClient:
             logger.info(f"Fetching account state for account {self.account_id} on {self.environment}")
 
             # Use SDK Info.user_state for perp state (positions, maintenance margin)
-            user_state = self.sdk_info.user_state(self.query_address)
+            user_state = self._fetch_user_state_with_hip3()
             margin_summary = user_state.get('crossMarginSummary') or user_state.get('marginSummary', {})
 
             total_equity = float(margin_summary.get('accountValue', 0) or 0)
@@ -583,7 +644,7 @@ class HyperliquidTradingClient:
             logger.info(f"Fetching positions for account {self.account_id} on {self.environment}")
 
             # Use SDK Info.user_state for positions (avoids CCXT spot market loading issues)
-            user_state = self.sdk_info.user_state(self.query_address)
+            user_state = self._fetch_user_state_with_hip3()
             asset_positions = user_state.get('assetPositions', [])
 
             # Get user fills to calculate position opened times (only when needed for AI prompts)
@@ -608,7 +669,7 @@ class HyperliquidTradingClient:
                 if abs(position_size) < 1e-8:
                     continue
 
-                coin = pos_data.get('coin')
+                coin = SymbolMapper.to_internal(pos_data.get('coin') or "", "hyperliquid")
                 side = 'Long' if position_size > 0 else 'Short'
 
                 # Calculate position timing
@@ -731,6 +792,9 @@ class HyperliquidTradingClient:
             # Must use query_address (master wallet) instead of wallet_address (agent key)
             # because fills are associated with the master wallet on Hyperliquid
             fills = self.sdk_info.user_fills(self.query_address)
+            for fill in fills:
+                if isinstance(fill, dict) and fill.get('coin'):
+                    fill['coin'] = SymbolMapper.to_internal(fill.get('coin'), "hyperliquid")
 
             logger.debug(f"Retrieved {len(fills)} fills for wallet {self.query_address}")
 
@@ -1157,7 +1221,7 @@ class HyperliquidTradingClient:
 
             # Use SDK Info to get frontend open orders (includes trigger conditions, TP/SL info)
             # Must use query_address (master wallet) for agent_key mode
-            raw_orders = self.sdk_info.frontend_open_orders(self.query_address)
+            raw_orders = self._fetch_frontend_open_orders_with_hip3()
 
             # Transform to simplified format for AI prompt
             orders = []
@@ -1189,9 +1253,10 @@ class HyperliquidTradingClient:
                 trigger_condition = order.get('triggerCondition', '')
                 trigger_price = order.get('triggerPx')
 
+                order_symbol = SymbolMapper.to_internal(order.get('coin', ''), "hyperliquid")
                 order_summary = {
                     'order_id': order.get('oid'),
-                    'symbol': order.get('coin', ''),
+                    'symbol': order_symbol,
                     'side': side,
                     'direction': direction,
                     'order_type': order.get('orderType', 'Limit'),
@@ -1216,7 +1281,8 @@ class HyperliquidTradingClient:
 
             # Filter by symbol if specified
             if symbol:
-                orders = [o for o in orders if o.get('symbol') == symbol]
+                internal_symbol = SymbolMapper.to_internal(symbol, "hyperliquid")
+                orders = [o for o in orders if o.get('symbol') == internal_symbol]
                 logger.debug(f"Filtered to {len(orders)} orders for symbol {symbol}")
 
             logger.info(f"Found {len(orders)} open orders")
@@ -1299,6 +1365,28 @@ class HyperliquidTradingClient:
 
         if leverage < 1 or leverage > 50:
             raise ValueError(f"Invalid leverage: {leverage}. Must be 1-50")
+        hip3_error = self._hip3_trade_error(symbol)
+        if hip3_error:
+            self._record_exchange_action(
+                action_type="create_order",
+                status="error",
+                symbol=symbol,
+                side="buy" if is_buy else "sell",
+                leverage=leverage,
+                size=size,
+                price=price,
+                request_payload={"symbol": symbol, "order_type": order_type, "reduce_only": reduce_only},
+                response_payload=None,
+                error_message=hip3_error,
+            )
+            return {
+                'status': 'error',
+                'error': hip3_error,
+                'environment': self.environment,
+                'symbol': symbol,
+            }
+        exchange_symbol = self._get_exchange_symbol(symbol)
+        is_hip3 = SymbolMapper.is_hip3_symbol(symbol)
 
         if size <= 0:
             raise ValueError(f"Invalid size: {size}. Must be positive")
@@ -1315,14 +1403,14 @@ class HyperliquidTradingClient:
         try:
             # Set leverage before placing order (if different from current)
             try:
-                result = self.sdk_exchange.update_leverage(leverage, symbol, is_cross=True)
+                result = self.sdk_exchange.update_leverage(leverage, exchange_symbol, is_cross=True)
                 logger.debug(f"Set leverage to {leverage}x for {symbol}, result: {result}")
                 self._record_exchange_action(
                     action_type="set_leverage",
                     status="success",
                     symbol=symbol,
                     leverage=leverage,
-                    request_payload={"symbol": symbol, "leverage": leverage},
+                    request_payload={"symbol": exchange_symbol, "leverage": leverage},
                     response_payload=result,
                 )
             except Exception as lev_err:
@@ -1332,9 +1420,127 @@ class HyperliquidTradingClient:
                     status="error",
                     symbol=symbol,
                     leverage=leverage,
-                    request_payload={"symbol": symbol, "leverage": leverage},
+                    request_payload={"symbol": exchange_symbol, "leverage": leverage},
                     error_message=str(lev_err),
                 )
+
+            if is_hip3:
+                if order_type == "market" and price is None:
+                    last_price = get_last_price_from_hyperliquid(symbol, environment="mainnet")
+                    if not last_price:
+                        raise ValueError(f"Market order requires price parameter or valid market price for {symbol}")
+                    price = last_price
+
+                precision = self._get_asset_precision(symbol)
+                price_decimals = precision.get('price_decimals', 1)
+                size_decimals = precision.get('size_decimals', 5)
+                price_tick = precision.get('price_tick')
+                size_step = precision.get('size_step')
+
+                is_ioc_order = order_type == "market"
+                sdk_price = self._round_to_precision(
+                    price,
+                    price_decimals,
+                    size_decimals,
+                    is_price=True,
+                    price_tick=price_tick,
+                    size_step=size_step,
+                    is_buy=is_buy,
+                    force_aggressive=is_ioc_order,
+                )
+                sdk_size = self._round_to_precision(
+                    size,
+                    price_decimals,
+                    size_decimals,
+                    is_price=False,
+                    price_tick=price_tick,
+                    size_step=size_step,
+                )
+                sdk_order_type = {"limit": {"tif": "Ioc" if is_ioc_order else "Gtc"}}
+                side = "buy" if is_buy else "sell"
+                action_payload = {
+                    "symbol": exchange_symbol,
+                    "side": side,
+                    "amount": sdk_size,
+                    "price": sdk_price,
+                    "order_type": sdk_order_type,
+                    "reduce_only": reduce_only,
+                }
+
+                sdk_order_params = {
+                    "name": exchange_symbol,
+                    "is_buy": is_buy,
+                    "sz": sdk_size,
+                    "limit_px": sdk_price,
+                    "order_type": sdk_order_type,
+                    "reduce_only": reduce_only,
+                }
+                builder_params = self._get_builder_params()
+                if builder_params:
+                    sdk_order_params["builder"] = builder_params
+
+                order = self.sdk_exchange.order(**sdk_order_params)
+                order_id = None
+                status = "error"
+                error_msg = None
+                filled_amount = 0
+                average_price = None
+
+                if order.get("status") == "ok":
+                    statuses = order.get("response", {}).get("data", {}).get("statuses", [])
+                    if statuses:
+                        main_status = statuses[0]
+                        if "filled" in main_status:
+                            filled_info = main_status["filled"]
+                            order_id = str(filled_info.get("oid", ""))
+                            filled_amount = float(filled_info.get("totalSz", 0) or 0)
+                            average_price = float(filled_info.get("avgPx", 0) or 0)
+                            status = "filled"
+                        elif "resting" in main_status:
+                            resting_info = main_status["resting"]
+                            order_id = str(resting_info.get("oid", ""))
+                            status = "resting"
+                        elif "error" in main_status:
+                            error_msg = main_status["error"]
+                        else:
+                            error_msg = f"Unknown status in response: {main_status}"
+                    else:
+                        error_msg = "No statuses in response"
+                else:
+                    error_msg = order.get("response", "Unknown error")
+
+                result = {
+                    'status': status,
+                    'environment': self.environment,
+                    'symbol': symbol,
+                    'is_buy': is_buy,
+                    'size': sdk_size,
+                    'leverage': leverage,
+                    'order_type': order_type,
+                    'reduce_only': reduce_only,
+                    'order_id': order_id,
+                    'filled_amount': filled_amount,
+                    'average_price': average_price,
+                    'raw_order': order,
+                    'wallet_address': self.wallet_address,
+                    'timestamp': int(time.time() * 1000),
+                }
+                if error_msg:
+                    result['error'] = error_msg
+
+                self._record_exchange_action(
+                    action_type="create_order",
+                    status="success" if status != 'error' else 'error',
+                    symbol=symbol,
+                    side=side,
+                    leverage=leverage,
+                    size=sdk_size,
+                    price=sdk_price,
+                    request_payload=action_payload,
+                    response_payload=order,
+                    error_message=result.get('error'),
+                )
+                return result
 
             # Prepare CCXT order parameters
             # Hyperliquid perpetual contract format: BASE/QUOTE:SETTLE
@@ -1527,11 +1733,23 @@ class HyperliquidTradingClient:
 
         if leverage < 1 or leverage > 50:
             raise ValueError(f"Invalid leverage: {leverage}. Must be 1-50")
+        hip3_error = self._hip3_trade_error(symbol)
+        if hip3_error:
+            self._record_exchange_action(
+                action_type="set_leverage",
+                status="error",
+                symbol=symbol,
+                leverage=leverage,
+                request_payload={"symbol": symbol, "leverage": leverage},
+                error_message=hip3_error,
+            )
+            return False
 
         try:
+            exchange_symbol = self._get_exchange_symbol(symbol)
             logger.info(f"Setting leverage for {symbol} to {leverage}x on {self.environment}")
 
-            result = self.sdk_exchange.update_leverage(leverage, symbol, is_cross=True)
+            result = self.sdk_exchange.update_leverage(leverage, exchange_symbol, is_cross=True)
             logger.debug(f"Set leverage result: {result}")
 
             self._record_exchange_action(
@@ -1539,7 +1757,7 @@ class HyperliquidTradingClient:
                 status="success",
                 symbol=symbol,
                 leverage=leverage,
-                request_payload={"symbol": symbol, "leverage": leverage},
+                request_payload={"symbol": exchange_symbol, "leverage": leverage},
                 response_payload=result,
             )
 
@@ -1574,15 +1792,28 @@ class HyperliquidTradingClient:
         """
         self._validate_environment(db)
 
+        hip3_error = self._hip3_trade_error(symbol)
+        if hip3_error:
+            logger.warning("[CANCEL] Refusing HIP-3 cancel for %s: %s", symbol, hip3_error)
+            self._record_exchange_action(
+                action_type="cancel_order",
+                status="error",
+                symbol=symbol,
+                request_payload={"order_id": order_id, "symbol": symbol},
+                error_message=hip3_error,
+            )
+            return False
+
         try:
             # Ensure order_id is an integer (SDK requires int)
             if isinstance(order_id, str):
                 order_id = int(order_id)
+            exchange_symbol = self._get_exchange_symbol(symbol)
             
             logger.info(f"[CANCEL] Cancelling order {order_id} (type={type(order_id).__name__}) for {symbol} on {self.environment}")
 
             # Use SDK to cancel order
-            result = self.sdk_exchange.cancel(symbol, order_id)
+            result = self.sdk_exchange.cancel(exchange_symbol, order_id)
             
             logger.info(f"[CANCEL] SDK cancel result: {result}")
             
@@ -1597,7 +1828,7 @@ class HyperliquidTradingClient:
                             action_type="cancel_order",
                             status="success",
                             symbol=symbol,
-                            request_payload={"order_id": order_id, "symbol": symbol},
+                            request_payload={"order_id": order_id, "symbol": exchange_symbol},
                             response_payload=result,
                         )
                         return True
@@ -1608,7 +1839,7 @@ class HyperliquidTradingClient:
                             action_type="cancel_order",
                             status="error",
                             symbol=symbol,
-                            request_payload={"order_id": order_id, "symbol": symbol},
+                            request_payload={"order_id": order_id, "symbol": exchange_symbol},
                             response_payload=result,
                             error_message=str(error_msg),
                         )
@@ -1620,7 +1851,7 @@ class HyperliquidTradingClient:
                     action_type="cancel_order",
                     status="success",
                     symbol=symbol,
-                    request_payload={"order_id": order_id, "symbol": symbol},
+                    request_payload={"order_id": order_id, "symbol": exchange_symbol},
                     response_payload=result,
                 )
                 return True
@@ -1630,7 +1861,7 @@ class HyperliquidTradingClient:
                     action_type="cancel_order",
                     status="error",
                     symbol=symbol,
-                    request_payload={"order_id": order_id, "symbol": symbol},
+                    request_payload={"order_id": order_id, "symbol": exchange_symbol},
                     response_payload=result,
                     error_message=str(error_msg),
                 )
@@ -1691,13 +1922,17 @@ class HyperliquidTradingClient:
 
             # Use SDK Info to get open orders (frontend_open_orders includes trigger orders)
             # Must use query_address (master wallet) for agent_key mode
-            open_orders = self.sdk_info.frontend_open_orders(self.query_address)
+            open_orders = self._fetch_frontend_open_orders_with_hip3()
 
             logger.debug(f"Retrieved {len(open_orders)} open orders for wallet {self.query_address}")
 
             # Filter by symbol if specified
             if symbol:
-                open_orders = [o for o in open_orders if o.get('coin') == symbol]
+                internal_symbol = SymbolMapper.to_internal(symbol, "hyperliquid")
+                open_orders = [
+                    o for o in open_orders
+                    if SymbolMapper.to_internal(o.get('coin', ''), "hyperliquid") == internal_symbol
+                ]
                 logger.debug(f"Filtered to {len(open_orders)} orders for symbol {symbol}")
 
             self._record_exchange_action(
@@ -1901,6 +2136,14 @@ class HyperliquidTradingClient:
             'new_sl': None,
             'errors': [],
         }
+        hip3_error = self._hip3_trade_error(symbol)
+        if hip3_error:
+            result['success'] = False
+            result['errors'].append(hip3_error)
+            return result
+
+        exchange_symbol = self._get_exchange_symbol(symbol)
+        internal_symbol = SymbolMapper.to_internal(symbol, "hyperliquid")
 
         # 0.1% threshold to account for rounding differences
         PRICE_CHANGE_THRESHOLD_PERCENT = 0.001  # 0.1%
@@ -1986,7 +2229,13 @@ class HyperliquidTradingClient:
             # Get position info if not provided
             if position_size is None or is_long is None:
                 positions = self.get_positions(db)
-                position = next((p for p in positions if p.get('coin') == symbol), None)
+                position = next(
+                    (
+                        p for p in positions
+                        if SymbolMapper.to_internal(p.get('coin') or "", "hyperliquid") == internal_symbol
+                    ),
+                    None,
+                )
                 if position:
                     position_size = abs(position.get('szi', 0))
                     is_long = position.get('szi', 0) > 0
@@ -2081,7 +2330,7 @@ class HyperliquidTradingClient:
 
                         # Prepare order parameters
                         tp_order_params = {
-                            "name": symbol,
+                            "name": exchange_symbol,
                             "is_buy": not is_long,
                             "sz": position_size,
                             "limit_px": rounded_tp,
@@ -2174,7 +2423,7 @@ class HyperliquidTradingClient:
 
                         # Prepare order parameters
                         sl_order_params = {
-                            "name": symbol,
+                            "name": exchange_symbol,
                             "is_buy": not is_long,
                             "sz": position_size,
                             "limit_px": rounded_sl,
@@ -2230,7 +2479,7 @@ class HyperliquidTradingClient:
                 status="success" if result['success'] else "partial",
                 symbol=symbol,
                 request_payload={
-                    "symbol": symbol,
+                    "symbol": exchange_symbol,
                     "new_tp_price": new_tp_price,
                     "new_sl_price": new_sl_price,
                     "position_size": position_size,
@@ -2432,7 +2681,9 @@ class HyperliquidTradingClient:
                 - size_step: Decimal step for size alignment
         """
         proxies = {'http': None, 'https': None}
-        info_url = f"{self.api_url}/info"
+        is_hip3 = SymbolMapper.is_hip3_symbol(symbol)
+        exchange_symbol = self._get_exchange_symbol(symbol)
+        info_url = "https://api.hyperliquid.xyz/info" if is_hip3 else f"{self.api_url}/info"
 
         try:
             # Default fallbacks
@@ -2443,6 +2694,8 @@ class HyperliquidTradingClient:
 
             # Fetch meta for size precision
             meta_payload = {"type": "meta"}
+            if is_hip3:
+                meta_payload["dex"] = "xyz"
             response = requests.post(info_url, json=meta_payload, timeout=10, proxies=proxies)
             response.raise_for_status()
 
@@ -2450,7 +2703,7 @@ class HyperliquidTradingClient:
             universe = data.get('universe', [])
 
             for asset in universe:
-                if asset.get('name') == symbol:
+                if asset.get('name') == exchange_symbol:
                     size_decimals = asset.get('szDecimals', 5)
                     break
 
@@ -2458,7 +2711,7 @@ class HyperliquidTradingClient:
 
             # Fetch order book to infer tick size
             try:
-                l2_payload = {"type": "l2Book", "coin": symbol}
+                l2_payload = {"type": "l2Book", "coin": exchange_symbol}
                 l2_response = requests.post(info_url, json=l2_payload, timeout=10, proxies=proxies)
                 l2_response.raise_for_status()
                 l2_data = l2_response.json()
@@ -2761,6 +3014,16 @@ class HyperliquidTradingClient:
         if sl_execution not in valid_execution:
             raise ValueError(f"Invalid sl_execution: {sl_execution}. Must be one of {valid_execution}")
 
+        hip3_error = self._hip3_trade_error(symbol)
+        if hip3_error:
+            return {
+                "status": "error",
+                "error": hip3_error,
+                "environment": self.environment,
+                "symbol": symbol,
+            }
+        exchange_symbol = self._get_exchange_symbol(symbol)
+
         # ===== Dynamic Precision Handling =====
         # Fetch asset-specific precision requirements from Hyperliquid
         # This works for ALL assets (BTC, ETH, SOL, etc.) and handles AI-generated imprecise numbers
@@ -2844,14 +3107,14 @@ class HyperliquidTradingClient:
         try:
             # Set leverage before placing order
             try:
-                result = self.sdk_exchange.update_leverage(leverage, symbol, is_cross=True)
+                result = self.sdk_exchange.update_leverage(leverage, exchange_symbol, is_cross=True)
                 logger.debug(f"Set leverage to {leverage}x for {symbol}, result: {result}")
                 self._record_exchange_action(
                     action_type="set_leverage",
                     status="success",
                     symbol=symbol,
                     leverage=leverage,
-                    request_payload={"symbol": symbol, "leverage": leverage},
+                    request_payload={"symbol": exchange_symbol, "leverage": leverage},
                     response_payload=result,
                 )
             except Exception as lev_err:
@@ -2861,7 +3124,7 @@ class HyperliquidTradingClient:
                     status="error",
                     symbol=symbol,
                     leverage=leverage,
-                    request_payload={"symbol": symbol, "leverage": leverage},
+                    request_payload={"symbol": exchange_symbol, "leverage": leverage},
                     error_message=str(lev_err),
                 )
 
@@ -2873,7 +3136,7 @@ class HyperliquidTradingClient:
 
             # Prepare order parameters
             main_order_params = {
-                "name": symbol,
+                "name": exchange_symbol,
                 "is_buy": is_buy,
                 "sz": size,
                 "limit_px": price,
@@ -2970,7 +3233,7 @@ class HyperliquidTradingClient:
 
                         # Prepare order parameters
                         tp_order_params = {
-                            "name": symbol,
+                            "name": exchange_symbol,
                             "is_buy": not is_buy,
                             "sz": size,
                             "limit_px": tp_limit_px,
@@ -3022,7 +3285,7 @@ class HyperliquidTradingClient:
 
                         # Prepare SL order parameters
                         sl_order_params = {
-                            "name": symbol,
+                            "name": exchange_symbol,
                             "is_buy": not is_buy,  # Opposite direction
                             "sz": size,
                             "limit_px": sl_limit_px,
@@ -3093,7 +3356,7 @@ class HyperliquidTradingClient:
                 size=size,
                 price=price,
                 request_payload={
-                    "symbol": symbol,
+                    "symbol": exchange_symbol,
                     "is_buy": is_buy,
                     "size": size,
                     "price": price,

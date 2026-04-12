@@ -126,7 +126,7 @@ def _call_llm(config: Dict, prompt: str) -> Optional[str]:
         build_chat_completion_endpoints,
     )
 
-    headers = build_llm_headers(config["api_format"], config["api_key"])
+    headers = build_llm_headers(config["api_format"], config["api_key"], config["base_url"])
     payload = build_llm_payload(
         model=config["model"],
         messages=[{"role": "user", "content": prompt}],

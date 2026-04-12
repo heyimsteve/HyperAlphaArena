@@ -115,6 +115,8 @@ MODEL_CONTEXT_WINDOWS = {
     # GLM (Zhipu)
     "glm-5": 200000,
     "glm-4": 200000,
+    # MiniMax
+    "minimax-m2": 204800,
 }
 
 # Compression threshold (70% of context window - conservative for tokenizer differences)
@@ -590,7 +592,7 @@ def generate_summary(
             endpoint = endpoints[0] if endpoints else f"{base_url}/chat/completions"
 
         # Use unified headers/payload builders (see build_llm_payload in ai_decision_service)
-        headers = build_llm_headers(api_format, api_key)
+        headers = build_llm_headers(api_format, api_key, base_url)
         body = build_llm_payload(
             model=model,
             messages=[{"role": "user", "content": prompt}],

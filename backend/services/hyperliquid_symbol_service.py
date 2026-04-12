@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from database.connection import SessionLocal
 from database.models import SystemConfig, Account
+from services.exchanges.symbol_mapper import SymbolMapper
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def _parse_symbol_json(value: Optional[str]) -> List[Dict[str, str]]:
             for entry in parsed:
                 if not isinstance(entry, dict):
                     continue
-                symbol = str(entry.get("symbol") or "").upper()
+                symbol = SymbolMapper.to_internal(str(entry.get("symbol") or ""), "hyperliquid")
                 if not symbol:
                     continue
                 result.append(
@@ -81,7 +82,7 @@ def _serialize_symbols(symbols: List[Dict[str, str]]) -> str:
     sanitized = []
     seen = set()
     for entry in symbols:
-        symbol = str(entry.get("symbol") or "").upper()
+        symbol = SymbolMapper.to_internal(str(entry.get("symbol") or ""), "hyperliquid")
         if not symbol or symbol in seen:
             continue
         seen.add(symbol)
@@ -93,6 +94,19 @@ def _serialize_symbols(symbols: List[Dict[str, str]]) -> str:
             }
         )
     return json.dumps(sanitized)
+
+
+def _restore_hip3_mappings(symbols: List[Dict[str, str]]) -> None:
+    """Restore HIP-3 symbol mappings from stored or freshly fetched metadata."""
+    for entry in symbols:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") != "hip3":
+            continue
+        internal_symbol = SymbolMapper.to_internal(str(entry.get("symbol") or ""), "hyperliquid")
+        if not internal_symbol:
+            continue
+        SymbolMapper.register_hip3_mapping(internal_symbol, f"xyz:{internal_symbol}")
 
 
 def _validate_symbol_tradability(symbol: str, environment: str = "testnet") -> bool:
@@ -153,6 +167,45 @@ def fetch_remote_symbols(environment: str = "testnet") -> List[Dict[str, str]]:
     if delisted_count > 0:
         logger.info(f"Filtered out {delisted_count} delisted symbols during Hyperliquid symbol refresh")
 
+    # Fetch HIP-3 DEX symbols from mainnet. Standard perp results above still
+    # remain valid if this optional branch fails.
+    hip3_url = META_ENDPOINTS["mainnet"]
+    hip3_count = 0
+    try:
+        hip3_resp = requests.post(hip3_url, json={"type": "meta", "dex": "xyz"}, timeout=10)
+        hip3_resp.raise_for_status()
+        hip3_data = hip3_resp.json()
+        hip3_universe = hip3_data.get("universe") or []
+
+        for entry in hip3_universe:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("isDelisted"):
+                continue
+            raw_name = entry.get("name")
+            if not raw_name:
+                continue
+
+            exchange_symbol = str(raw_name)
+            internal_symbol = SymbolMapper.to_internal(exchange_symbol, "hyperliquid")
+            if not internal_symbol or internal_symbol in seen:
+                continue
+
+            seen.add(internal_symbol)
+            SymbolMapper.register_hip3_mapping(internal_symbol, exchange_symbol)
+            results.append(
+                {
+                    "symbol": internal_symbol,
+                    "name": internal_symbol,
+                    "type": "hip3",
+                }
+            )
+            hip3_count += 1
+
+        logger.info("Fetched %d HIP-3 Hyperliquid symbols", hip3_count)
+    except Exception as err:
+        logger.warning("Failed to fetch HIP-3 symbols: %s", err)
+
     return results
 
 
@@ -168,6 +221,19 @@ def refresh_hyperliquid_symbols(environment: str = "mainnet") -> List[Dict[str, 
 
     with SessionLocal() as db:
         if remote_symbols:
+            if not any(entry.get("type") == "hip3" for entry in remote_symbols):
+                stored = _parse_symbol_json(_load_config_value(db, AVAILABLE_SYMBOLS_KEY))
+                cached_hip3 = [entry for entry in stored if entry.get("type") == "hip3"]
+                if cached_hip3:
+                    existing = {entry["symbol"] for entry in remote_symbols}
+                    for entry in cached_hip3:
+                        if entry["symbol"] not in existing:
+                            remote_symbols.append(entry)
+                    _restore_hip3_mappings(cached_hip3)
+                    logger.warning(
+                        "Keeping %d cached HIP-3 symbols because HIP-3 refresh returned none",
+                        len(cached_hip3),
+                    )
             _save_config_value(db, AVAILABLE_SYMBOLS_KEY, _serialize_symbols(remote_symbols))
             _ensure_watchlist_valid(db, remote_symbols)
             logger.info("Hyperliquid symbol catalog refreshed (%d symbols)", len(remote_symbols))
@@ -224,6 +290,7 @@ def get_available_symbols() -> List[Dict[str, str]]:
     with SessionLocal() as db:
         stored = _parse_symbol_json(_load_config_value(db, AVAILABLE_SYMBOLS_KEY))
         if stored:
+            _restore_hip3_mappings(stored)
             return stored
         # Seed defaults if missing
         _save_config_value(db, AVAILABLE_SYMBOLS_KEY, _serialize_symbols(DEFAULT_SYMBOLS))
@@ -239,6 +306,7 @@ def get_available_symbols_info() -> Dict[str, Optional[str]]:
         updated_at = config.updated_at.isoformat() if config and config.updated_at else None
         if not symbols:
             symbols = DEFAULT_SYMBOLS.copy()
+        _restore_hip3_mappings(symbols)
         return {"symbols": symbols, "updated_at": updated_at}
 
 

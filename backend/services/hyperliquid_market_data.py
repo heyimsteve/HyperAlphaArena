@@ -7,7 +7,26 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 import time
 
+from services.exchanges.symbol_mapper import SymbolMapper
+
 logger = logging.getLogger(__name__)
+
+INTERVAL_SECONDS = {
+    '1m': 60,
+    '3m': 180,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1800,
+    '1h': 3600,
+    '2h': 7200,
+    '4h': 14400,
+    '8h': 28800,
+    '12h': 43200,
+    '1d': 86400,
+    '3d': 259200,
+    '1w': 604800,
+    '1M': 2592000,
+}
 
 class HyperliquidClient:
     def __init__(self, environment: str = "mainnet"):
@@ -70,6 +89,12 @@ class HyperliquidClient:
     def get_last_price(self, symbol: str) -> Optional[float]:
         """Get the last price for a symbol"""
         try:
+            if SymbolMapper.is_hip3_symbol(symbol):
+                ticker = self.get_ticker_data(symbol)
+                if ticker and ticker.get('price'):
+                    return float(ticker['price'])
+                return None
+
             if not self.exchange:
                 self._initialize_exchange()
 
@@ -104,17 +129,24 @@ class HyperliquidClient:
         """Get complete ticker data using Hyperliquid native API"""
         try:
             import requests
+            is_hip3 = SymbolMapper.is_hip3_symbol(symbol)
 
             # Use environment-specific API endpoint
-            if self.environment == "testnet":
+            if is_hip3:
+                api_url = "https://api.hyperliquid.xyz/info"
+            elif self.environment == "testnet":
                 api_url = "https://api.hyperliquid-testnet.xyz/info"
             else:
                 api_url = "https://api.hyperliquid.xyz/info"
 
+            payload = {"type": "metaAndAssetCtxs"}
+            if is_hip3:
+                payload["dex"] = "xyz"
+
             # Use Hyperliquid native API for complete market data
             response = requests.post(
                 api_url,
-                json={"type": "metaAndAssetCtxs"},
+                json=payload,
                 timeout=10
             )
             response.raise_for_status()
@@ -124,24 +156,30 @@ class HyperliquidClient:
                 raise Exception("Invalid API response structure")
 
             # Find symbol index in universe (meta data)
-            symbol_upper = symbol.upper()
+            symbol_upper = SymbolMapper.to_internal(symbol.upper(), "hyperliquid")
             symbol_index = None
 
             if isinstance(data[0], dict) and 'universe' in data[0]:
                 for i, asset_meta in enumerate(data[0]['universe']):
                     if isinstance(asset_meta, dict):
-                        asset_name = asset_meta.get('name', '').upper()
-                        if asset_name == symbol_upper or asset_name == symbol_upper.replace('/', ''):
+                        asset_name = str(asset_meta.get('name', '')).upper()
+                        asset_internal = SymbolMapper.to_internal(asset_name, "hyperliquid")
+                        if asset_internal == symbol_upper or asset_name == symbol_upper.replace('/', ''):
                             symbol_index = i
                             break
 
             if symbol_index is None or symbol_index >= len(data[1]):
+                if is_hip3:
+                    logger.warning("HIP-3 ticker symbol not found in Hyperliquid metadata: %s", symbol)
+                    return None
                 # Fallback to CCXT for unsupported symbols
                 return self._get_ccxt_ticker_fallback(symbol)
 
             # Get asset data by index
             asset_data = data[1][symbol_index]
             if not isinstance(asset_data, dict):
+                if is_hip3:
+                    return None
                 return self._get_ccxt_ticker_fallback(symbol)
 
             # Extract data from Hyperliquid API
@@ -175,6 +213,8 @@ class HyperliquidClient:
 
         except Exception as e:
             logger.error(f"Error fetching Hyperliquid ticker for {symbol}: {e}")
+            if SymbolMapper.is_hip3_symbol(symbol):
+                return None
             # Fallback to CCXT
             return self._get_ccxt_ticker_fallback(symbol)
 
@@ -255,6 +295,9 @@ class HyperliquidClient:
     def get_kline_data(self, symbol: str, period: str = '1d', count: int = 100, persist: bool = True) -> List[Dict[str, Any]]:
         """Get kline/candlestick data for a symbol"""
         try:
+            if SymbolMapper.is_hip3_symbol(symbol):
+                return self._fetch_kline_native(symbol, period, count, persist)
+
             if not self.exchange:
                 self._initialize_exchange()
 
@@ -349,6 +392,9 @@ class HyperliquidClient:
             List of kline data dictionaries
         """
         try:
+            if SymbolMapper.is_hip3_symbol(symbol):
+                return self._fetch_kline_native_range(symbol, period, since_ms, until_ms)
+
             if not self.exchange:
                 self._initialize_exchange()
 
@@ -551,6 +597,82 @@ class HyperliquidClient:
         # Default to perpetual swap format (most common on Hyperliquid)
         symbol_upper = symbol_clean
         return f"{symbol_upper}/USDC:USDC"
+
+    def _fetch_kline_native(self, symbol: str, period: str = '1d', count: int = 100, persist: bool = True) -> List[Dict[str, Any]]:
+        """Fetch HIP-3 klines through Hyperliquid native candleSnapshot API."""
+        secs = INTERVAL_SECONDS.get(period, 86400)
+        end_time = int(time.time() * 1000)
+        start_time = end_time - (secs * count * 1000)
+        return self._fetch_kline_native_range(symbol, period, start_time, end_time, persist=persist)
+
+    def _fetch_kline_native_range(
+        self,
+        symbol: str,
+        period: str,
+        since_ms: int,
+        until_ms: Optional[int] = None,
+        persist: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Fetch HIP-3 klines for an explicit time range."""
+        import requests
+
+        exchange_symbol = SymbolMapper.to_exchange(symbol, "hyperliquid")
+        end_time = until_ms or int(time.time() * 1000)
+        payload = {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": exchange_symbol,
+                "interval": period,
+                "startTime": since_ms,
+                "endTime": end_time,
+            },
+        }
+
+        try:
+            resp = requests.post("https://api.hyperliquid.xyz/info", json=payload, timeout=15)
+            resp.raise_for_status()
+            candles = resp.json()
+        except Exception as err:
+            logger.warning("Failed to fetch HIP-3 klines for %s: %s", symbol, err)
+            return []
+
+        klines: List[Dict[str, Any]] = []
+        candle_items = candles if isinstance(candles, list) else []
+        for candle in candle_items:
+            try:
+                ts_ms = candle['t']
+                open_price = float(candle['o'])
+                high_price = float(candle['h'])
+                low_price = float(candle['l'])
+                close_price = float(candle['c'])
+                volume = float(candle['v'])
+            except (KeyError, TypeError, ValueError) as parse_err:
+                logger.debug("Skipping malformed HIP-3 candle for %s: %s", symbol, parse_err)
+                continue
+
+            change = close_price - open_price if open_price else 0
+            percent = (change / open_price * 100) if open_price else 0
+            klines.append({
+                'timestamp': int(ts_ms / 1000),
+                'datetime': datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(),
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': volume,
+                'amount': volume * close_price if volume and close_price else None,
+                'chg': change,
+                'percent': percent,
+            })
+
+        if persist and klines:
+            try:
+                self._persist_kline_data(SymbolMapper.to_internal(symbol, "hyperliquid"), period, klines)
+            except Exception as persist_error:
+                logger.warning(f"Failed to persist HIP-3 kline data for {symbol}: {persist_error}")
+
+        logger.info("Got %d HIP-3 klines for %s", len(klines), exchange_symbol)
+        return klines
 
 
 # Client factory functions

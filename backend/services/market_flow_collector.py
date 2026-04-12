@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from hyperliquid.info import Info
 
+from services.exchanges.symbol_mapper import SymbolMapper
 from services.large_order_threshold_tracker import LargeOrderThresholdTracker
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,18 @@ class MarketFlowCollector:
 
         logger.info("MarketFlowCollector initialized")
 
+    def _create_info_client(self, base_url: str) -> Info:
+        """Create SDK Info, falling back to standard perps if HIP-3 metadata fails."""
+        try:
+            return Info(base_url=base_url, skip_ws=False, perp_dexs=['', 'xyz'])
+        except Exception as hip3_error:
+            logger.warning(
+                "Failed to load HIP-3 metadata for market flow collector; "
+                "falling back to standard perps only: %s",
+                hip3_error,
+            )
+            return Info(base_url=base_url, skip_ws=False, perp_dexs=[''])
+
     def start(self, symbols: Optional[List[str]] = None):
         """Start the collector with given symbols or from watchlist"""
         if self.running:
@@ -171,7 +184,7 @@ class MarketFlowCollector:
         try:
             base_url = "https://api.hyperliquid.xyz"
             logger.info(f"[Start] Connecting to Hyperliquid API: {base_url}")
-            self.info = Info(base_url=base_url, skip_ws=False)
+            self.info = self._create_info_client(base_url)
 
             self.running = True
             self.subscribed_symbols = []
@@ -279,8 +292,9 @@ class MarketFlowCollector:
         if not self.info:
             return
 
-        # Convert to original Hyperliquid coin name (e.g., KSHIB -> kSHIB)
-        coin = self._get_original_coin_name(symbol)
+        # Convert to original Hyperliquid coin name (e.g., KSHIB -> kSHIB, GOLD -> xyz:GOLD)
+        exchange_symbol = SymbolMapper.to_exchange(symbol, "hyperliquid")
+        coin = self._get_original_coin_name(exchange_symbol)
 
         try:
             # Initialize buffer (use original symbol for internal tracking)
@@ -320,7 +334,8 @@ class MarketFlowCollector:
             return
 
         # Convert to original Hyperliquid coin name
-        coin = self._get_original_coin_name(symbol)
+        exchange_symbol = SymbolMapper.to_exchange(symbol, "hyperliquid")
+        coin = self._get_original_coin_name(exchange_symbol)
 
         try:
             ids = self.subscription_ids[symbol]
@@ -563,7 +578,7 @@ class MarketFlowCollector:
             # Create new Info client
             logger.info("[Reconnect] Creating new Hyperliquid Info client...")
             base_url = "https://api.hyperliquid.xyz"
-            self.info = Info(base_url=base_url, skip_ws=False)
+            self.info = self._create_info_client(base_url)
             logger.info("[Reconnect] New Info client created")
 
             # Resubscribe to all symbols

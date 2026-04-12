@@ -1477,7 +1477,7 @@ class HyperAiProfile(Base):
     onboarding_completed = Column(Boolean, default=False)  # True after initial setup conversation
 
     # LLM provider configuration (user selects during onboarding)
-    llm_provider = Column(String(50), nullable=True)  # openai / anthropic / google / deepseek / zhipu / openrouter / qwen / moonshot / custom
+    llm_provider = Column(String(50), nullable=True)  # openai / anthropic / google / deepseek / zhipu / minimax / minimax-cn / openrouter / qwen / moonshot / custom
     llm_base_url = Column(String(500), nullable=True)  # API endpoint URL
     llm_api_key_encrypted = Column(Text, nullable=True)  # Encrypted API key (use decrypt_private_key to read)
     llm_model = Column(String(100), nullable=True)  # Model name (e.g., gpt-4o, claude-opus-4-6)

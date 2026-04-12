@@ -9,7 +9,8 @@ Supported providers:
 - Anthropic (Claude 3.5 Sonnet, Claude 3 Opus)
 - Google Gemini (Gemini 2.0 Flash, Gemini 1.5 Pro)
 - Deepseek (Deepseek Chat, Deepseek Reasoner)
-- Z.ai/智谱 (GLM-4, GLM-4-Plus)
+- Z.ai/智谱 (GLM-5.1, GLM-5, GLM-5-Turbo)
+- MiniMax Global/CN (M2.7, M2.5)
 - OpenRouter (Multi-provider gateway)
 - Qwen/通义千问 (Qwen-Max, Qwen-Plus)
 - Moonshot/月之暗面 (Moonshot-v1-128k)
@@ -109,15 +110,39 @@ PRESET_PROVIDERS: Dict[str, LLMProvider] = {
         name="Z.ai / 智谱",
         base_url="https://open.bigmodel.cn/api/paas/v4",
         models=[
+            # GLM-5 series (latest, 2026)
+            "glm-5.1", "glm-5", "glm-5-turbo", "glm-5v-turbo",
             # GLM-4 series
             "glm-4-plus", "glm-4-0520", "glm-4",
             "glm-4-air", "glm-4-airx", "glm-4-flash",
-            "glm-4-long", "glm-4v", "glm-4v-plus",
-            # GLM-3 legacy
-            "glm-3-turbo",
+            "glm-4-long",
         ],
         api_format="openai",
-        description="Chinese AI with excellent Chinese language support"
+        description="GLM-5 series with strong tool calling and reasoning"
+    ),
+    "minimax": LLMProvider(
+        id="minimax",
+        name="MiniMax (Global)",
+        base_url="https://api.minimax.io/v1",
+        models=[
+            "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
+        ],
+        api_format="openai",
+        description="For users outside China mainland"
+    ),
+    "minimax-cn": LLMProvider(
+        id="minimax-cn",
+        name="MiniMax (CN / 国内)",
+        base_url="https://api.minimaxi.com/v1",
+        models=[
+            "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1", "MiniMax-M2.1-highspeed",
+        ],
+        api_format="openai",
+        description="For users in China mainland (国内用户)"
     ),
     "openrouter": LLMProvider(
         id="openrouter",

@@ -14,7 +14,7 @@ import time
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade, CryptoPrice, AccountAssetSnapshot, HyperliquidWallet, AccountPromptBinding
 from services.asset_curve_calculator import invalidate_asset_curve_cache
-from services.ai_decision_service import build_chat_completion_endpoints, detect_api_format, _extract_text_from_message
+from services.ai_decision_service import build_chat_completion_endpoints, build_llm_headers, detect_api_format, _extract_text_from_message
 from schemas.account import StrategyConfig, StrategyConfigUpdate
 from repositories.strategy_repo import get_strategy_by_account, upsert_strategy
 from services.trading_strategy import hyper_strategy_manager
@@ -866,11 +866,7 @@ def test_llm_connection(payload: dict):
 
             if api_format == 'anthropic':
                 # Anthropic native format
-                headers = {
-                    "Content-Type": "application/json",
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01"
-                }
+                headers = build_llm_headers(api_format, api_key, endpoint)
                 payload_data = {
                     "model": model,
                     "max_tokens": 1024,

@@ -319,7 +319,7 @@ def _call_llm_for_dedup(
         else:
             endpoint = endpoints[0] if endpoints else f"{base_url}/chat/completions"
 
-        headers = build_llm_headers(api_format, api_key)
+        headers = build_llm_headers(api_format, api_key, base_url)
         body = build_llm_payload(
             model=model,
             messages=[{"role": "user", "content": prompt}],
@@ -472,7 +472,7 @@ def extract_memories_from_conversation(
             endpoint = endpoints[0] if endpoints else f"{base_url}/chat/completions"
 
         # Use unified headers/payload builders (see build_llm_payload in ai_decision_service)
-        headers = build_llm_headers(api_format, api_key)
+        headers = build_llm_headers(api_format, api_key, base_url)
         body = build_llm_payload(
             model=model,
             messages=[{"role": "user", "content": prompt}],

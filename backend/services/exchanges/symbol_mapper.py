@@ -17,7 +17,7 @@ class SymbolMapper:
 
     Internal format: "BTC", "ETH" (base currency only)
     Binance format: "BTCUSDT", "ETHUSDT" (with quote currency suffix)
-    Hyperliquid format: "BTC", "ETH" (same as internal)
+    Hyperliquid format: "BTC", "ETH" for standard perps, "xyz:GOLD" for HIP-3
     """
 
     # Quote currency for each exchange's perpetual contracts
@@ -44,6 +44,27 @@ class SymbolMapper:
         }
     }
 
+    _hip3_mappings: Dict[str, str] = {}
+
+    @classmethod
+    def register_hip3_mapping(cls, internal: str, exchange: str) -> None:
+        """Register a Hyperliquid HIP-3 internal -> exchange symbol mapping."""
+        internal_symbol = str(internal or "").upper()
+        exchange_symbol = str(exchange or "")
+        if not internal_symbol or not exchange_symbol:
+            return
+        cls._hip3_mappings[internal_symbol] = exchange_symbol
+
+    @classmethod
+    def is_hip3_symbol(cls, symbol: str) -> bool:
+        """Return True when the symbol is a registered Hyperliquid HIP-3 symbol."""
+        return str(symbol or "").upper() in cls._hip3_mappings
+
+    @classmethod
+    def clear_hip3_mappings(cls) -> None:
+        """Clear registered HIP-3 mappings."""
+        cls._hip3_mappings.clear()
+
     @classmethod
     def to_exchange(cls, symbol: str, exchange: str) -> str:
         """
@@ -59,6 +80,9 @@ class SymbolMapper:
         exchange = exchange.lower()
 
         if exchange == "hyperliquid":
+            upper = str(symbol or "").upper()
+            if upper in cls._hip3_mappings:
+                return cls._hip3_mappings[upper]
             return symbol
 
         # Check special mappings first
@@ -88,6 +112,9 @@ class SymbolMapper:
         exchange = exchange.lower()
 
         if exchange == "hyperliquid":
+            symbol_str = str(symbol or "")
+            if symbol_str.lower().startswith("xyz:"):
+                return symbol_str.split(":", 1)[1].upper()
             return symbol
 
         # Check reverse mappings first

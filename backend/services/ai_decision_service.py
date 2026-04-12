@@ -144,6 +144,10 @@ def get_max_tokens(model: str) -> int:
     if 'glm' in model_lower:
         return 16000
 
+    # MiniMax M2 series
+    if 'minimax' in model_lower:
+        return 16000
+
     # Deepseek-chat
     if 'deepseek' in model_lower:
         return 8000
@@ -1450,6 +1454,10 @@ def detect_api_format(base_url: str) -> tuple:
     elif base_lower.endswith('/chat/completions'):
         # OpenAI format, already complete
         return (normalized, 'openai')
+    elif base_lower.endswith('/anthropic'):
+        # Third-party Anthropic-compatible base URL, e.g. MiniMax.
+        # Anthropic SDKs append /v1/messages internally; we use requests directly.
+        return (f"{normalized}/v1/messages", 'anthropic')
     else:
         # No specific endpoint, append /chat/completions (default OpenAI format)
         return (f"{normalized}/chat/completions", 'openai')
@@ -1479,6 +1487,10 @@ def build_chat_completion_endpoints(base_url: str, model: Optional[str] = None) 
     elif base_lower.endswith('/chat/completions'):
         # OpenAI format, already complete - use as-is
         return [normalized]
+    elif base_lower.endswith('/anthropic'):
+        # Third-party Anthropic-compatible base URL, e.g. MiniMax.
+        # Anthropic SDKs append /v1/messages internally; we use requests directly.
+        return [f"{normalized}/v1/messages"]
 
     # No specific endpoint, build OpenAI-compatible endpoints
     endpoints: List[str] = []
@@ -1545,16 +1557,32 @@ def is_new_openai_model(model: str) -> bool:
     )
 
 
-def build_llm_headers(api_format: str, api_key: str) -> dict:
+def is_minimax_anthropic_url(url: Optional[str]) -> bool:
+    """Return True for MiniMax's Anthropic-compatible gateway URLs."""
+    normalized = (url or "").strip().rstrip("/").lower()
+    return (
+        "api.minimax.io/anthropic" in normalized
+        or "api.minimaxi.com/anthropic" in normalized
+    )
+
+
+def build_llm_headers(api_format: str, api_key: str, base_url: Optional[str] = None) -> dict:
     """Build HTTP headers for LLM API calls.
 
     Args:
         api_format: 'anthropic' or 'openai'
         api_key: The API key
+        base_url: Optional URL used for provider-specific auth quirks
     """
     headers = {"Content-Type": "application/json"}
     if api_format == "anthropic":
-        headers["x-api-key"] = api_key
+        if is_minimax_anthropic_url(base_url):
+            # MiniMax's Anthropic-compatible /anthropic gateway uses the
+            # Messages schema but rejects Anthropic's official x-api-key header.
+            # Keep this scoped to MiniMax URLs so the official Anthropic API is unchanged.
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            headers["x-api-key"] = api_key
         headers["anthropic-version"] = "2023-06-01"
     else:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -1694,11 +1722,25 @@ def extract_reasoning(message: dict) -> str:
                 return "\n\n".join(parts)
     except Exception:
         pass
+    # Strategy 5: MiniMax reasoning_details
+    rd = message.get("reasoning_details")
+    if isinstance(rd, list):
+        parts = []
+        for item in rd:
+            if isinstance(item, dict):
+                t = item.get("text")
+                if t and isinstance(t, str) and t.strip():
+                    parts.append(t.strip())
+        if parts:
+            return "\n\n".join(parts)
     return ""
 
 
-# Regex to match <thinking>...</thinking> tags (including multiline content)
-_THINKING_TAG_RE = re.compile(r'<thinking>\s*([\s\S]*?)\s*</thinking>', re.IGNORECASE)
+# Regex to match <thinking>...</thinking> and <think>...</think> tags.
+_THINKING_TAG_RE = re.compile(
+    r'<think(?:ing)?>\s*([\s\S]*?)\s*</think(?:ing)?>',
+    re.IGNORECASE
+)
 
 
 def strip_thinking_tags(content: str) -> tuple:
@@ -1712,7 +1754,8 @@ def strip_thinking_tags(content: str) -> tuple:
         (clean_content, extracted_thinking) tuple.
         extracted_thinking is empty string if no tags found.
     """
-    if not content or '<thinking>' not in content.lower():
+    content_lower = (content or "").lower()
+    if not content or ('<thinking>' not in content_lower and '<think>' not in content_lower):
         return (content, "")
 
     parts = []

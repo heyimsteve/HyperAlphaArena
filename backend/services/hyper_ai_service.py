@@ -241,7 +241,7 @@ def test_llm_connection(
 
     try:
         # Use unified headers/payload builders (see build_llm_payload in ai_decision_service)
-        headers = build_llm_headers(api_format, api_key)
+        headers = build_llm_headers(api_format, api_key, url)
         payload = build_llm_payload(
             model=model,
             messages=[{"role": "user", "content": "Hi"}],
@@ -645,7 +645,7 @@ def stream_chat_response(
         return
 
     # Use unified headers builder (see build_llm_headers in ai_decision_service)
-    headers = build_llm_headers(api_format, api_key)
+    headers = build_llm_headers(api_format, api_key, base_url)
 
     # Create assistant message upfront with is_complete=False for interrupt recovery
     assistant_msg = HyperAiMessage(
@@ -1061,7 +1061,7 @@ def stream_onboarding_response(
         return
 
     # Use unified headers/payload builders (see build_llm_payload in ai_decision_service)
-    headers = build_llm_headers(api_format, api_key)
+    headers = build_llm_headers(api_format, api_key, base_url)
 
     body = build_llm_payload(
         model=model,
@@ -1216,7 +1216,7 @@ def stream_insight_response(
         yield format_sse_event("error", {"message": "Invalid API endpoint"})
         return
 
-    headers = build_llm_headers(api_format, api_key)
+    headers = build_llm_headers(api_format, api_key, base_url)
     messages = _build_insight_messages(lang or "en", context, selected_event)
     body = build_llm_payload(
         model=model,
@@ -1712,7 +1712,7 @@ def generate_suggested_questions(db: Session) -> List[str]:
         else:
             endpoint = endpoints[0] if endpoints else f"{base_url.rstrip('/')}/chat/completions"
 
-        headers = build_llm_headers(api_format, api_key)
+        headers = build_llm_headers(api_format, api_key, endpoint)
         body = build_llm_payload(
             model=model,
             messages=[{"role": "user", "content": prompt}],
