@@ -1241,7 +1241,7 @@ Regime Types:
     if db:
         try:
             from services.market_regime_service import get_market_regime
-            supported_timeframes = ["1m", "5m", "15m", "1h"]
+            supported_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
             def format_regime_text(symbol, tf, result):
                 """Format regime result with symbol and timeframe context"""
@@ -2812,7 +2812,7 @@ def _parse_factor_variables(template_text: str) -> List[tuple]:
     results = []
     seen = set()
 
-    preferred_pattern = r'\{([A-Z][A-Z0-9]*)_factor_(1m|5m|15m|1h|4h)_([A-Za-z][A-Za-z0-9_]*)\}'
+    preferred_pattern = r'\{([A-Z][A-Z0-9]*)_factor_(1m|5m|15m|1h|4h|1d)_([A-Za-z][A-Za-z0-9_]*)\}'
     for match in re.finditer(preferred_pattern, template_text):
         symbol = match.group(1)
         period = match.group(2)

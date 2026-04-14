@@ -201,7 +201,7 @@ Or for program:
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | symbol | string | Yes | Trading symbol |
-| period | string | No | Time period (default: 1h) |
+| period | string | No | Time period: 1m, 5m, 15m, 1h, 4h, 1d (default: 1h) |
 
 **Implementation**:
 ```python
@@ -237,7 +237,7 @@ Or for program:
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | symbol | string | Yes | Trading symbol |
-| period | string | No | Time period (default: 1h) |
+| period | string | No | Time period: 1m, 5m, 15m, 1h, 4h, 1d (default: 1h) |
 | metrics | array | No | Specific metrics to get (default: all) |
 
 **Implementation**:

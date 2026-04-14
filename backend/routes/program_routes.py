@@ -447,7 +447,7 @@ def _get_available_apis() -> Dict[str, Any]:
             "trading_strategy": "Optional: Entry thesis, risk controls",
         },
         "operation_values": ["buy", "sell", "hold", "close"],
-        "supported_periods": ["1m", "5m", "15m", "1h", "4h"],
+        "supported_periods": ["1m", "5m", "15m", "1h", "4h", "1d"],
         "math_functions": {
             "usage": "Call via math.xxx (e.g., math.pow(10, 2))",
             "functions": ["sqrt", "log", "log10", "exp", "pow", "floor", "ceil", "fabs"],

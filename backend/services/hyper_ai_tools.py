@@ -122,7 +122,7 @@ HYPER_AI_TOOLS = [
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string", "description": "Trading symbol"},
-                    "period": {"type": "string", "enum": ["1m", "5m", "15m", "1h", "4h"], "description": "Time period (default: 1h)"},
+                    "period": {"type": "string", "enum": ["1m", "5m", "15m", "1h", "4h", "1d"], "description": "Time period (default: 1h)"},
                     "exchange": {"type": "string", "enum": ["hyperliquid", "binance"], "description": "Exchange (default: hyperliquid)"}
                 },
                 "required": ["symbol"]
@@ -138,7 +138,7 @@ HYPER_AI_TOOLS = [
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string", "description": "Trading symbol"},
-                    "period": {"type": "string", "enum": ["1m", "5m", "15m", "1h", "4h"], "description": "Time period (default: 1h)"},
+                    "period": {"type": "string", "enum": ["1m", "5m", "15m", "1h", "4h", "1d"], "description": "Time period (default: 1h)"},
                     "exchange": {"type": "string", "enum": ["hyperliquid", "binance"], "description": "Exchange (default: hyperliquid)"}
                 },
                 "required": ["symbol"]

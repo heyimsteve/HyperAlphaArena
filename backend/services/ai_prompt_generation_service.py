@@ -294,17 +294,17 @@ VALID_VARIABLE_PATTERNS = [
     r"trigger_context", r"news_section", r"output_format",
     # Market regime
     r"market_regime_description", r"trigger_market_regime",
-    r"market_regime(?:_(?:1m|5m|15m|1h))?",
+    r"market_regime(?:_(?:1m|5m|15m|1h|4h|1d))?",
     # Symbol-specific patterns (BTC, ETH, SOL, etc.)
     r"[A-Z]+_market_data",
     r"[A-Z]+_klines_(?:1m|3m|5m|15m|30m|1h|2h|4h|8h|12h|1d|3d|1w|1M)",
-    r"[A-Z]+_market_regime(?:_(?:1m|5m|15m|1h))?",
+    r"[A-Z]+_market_regime(?:_(?:1m|5m|15m|1h|4h|1d))?",
     # Technical indicators
     r"[A-Z]+_(?:MA|EMA|RSI14|RSI7|MACD|BOLL|ATR14|VWAP|OBV|STOCH)_(?:1m|3m|5m|15m|30m|1h|2h|4h|8h|12h|1d)",
     # Flow indicators
-    r"[A-Z]+_(?:CVD|OI|OI_DELTA|TAKER|FUNDING|DEPTH|IMBALANCE)_(?:1m|3m|5m|15m|30m|1h|2h|4h)",
+    r"[A-Z]+_(?:CVD|OI|OI_DELTA|TAKER|FUNDING|DEPTH|IMBALANCE|PRICE_CHANGE|VOLATILITY)_(?:1m|3m|5m|15m|30m|1h|2h|4h|8h|12h|1d)",
     # Factor variables: preferred {SYMBOL_factor_PERIOD_NAME}, legacy {SYMBOL_factor_NAME}
-    r"[A-Z][A-Z0-9]*_factor_(?:1m|5m|15m|1h|4h)_[A-Za-z][A-Za-z0-9_]*",
+    r"[A-Z][A-Z0-9]*_factor_(?:1m|5m|15m|1h|4h|1d)_[A-Za-z][A-Za-z0-9_]*",
     r"[A-Z][A-Z0-9]*_factor_[A-Za-z][A-Za-z0-9_]*",
 ]
 

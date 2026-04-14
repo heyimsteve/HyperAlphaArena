@@ -811,7 +811,7 @@ Get order flow metrics.
 **Parameters**:
 - `symbol`: Trading symbol (e.g., "BTC")
 - `metric`: Metric type ("CVD", "OI", "OI_DELTA", "TAKER", "FUNDING", "DEPTH", "IMBALANCE")
-- `period`: Time period ("1m", "5m", "15m", "1h", "4h")
+- `period`: Time period ("1m", "5m", "15m", "1h", "4h", "1d")
 
 **Example Return** (CVD):
 ```python
@@ -905,7 +905,7 @@ Get price change over period.
 
 **Parameters**:
 - `symbol`: Trading symbol (e.g., "BTC")
-- `period`: Time period ("1m", "5m", "15m", "1h", "4h")
+- `period`: Time period ("1m", "5m", "15m", "1h", "4h", "1d")
 
 **Example Return**:
 ```python
@@ -924,7 +924,7 @@ Get factor value and effectiveness metrics for a specific K-line period.
 **Parameters**:
 - `symbol`: Trading symbol (e.g., "BTC")
 - `factor_name`: Factor name (e.g., "RSI21", "MOM10", or custom factor name)
-- `period`: Time period ("1m", "5m", "15m", "1h", "4h"). Omitted defaults to `5m` for backward compatibility.
+- `period`: Time period ("1m", "5m", "15m", "1h", "4h", "1d"). Omitted defaults to `5m` for backward compatibility.
 
 **Example Return**:
 ```python

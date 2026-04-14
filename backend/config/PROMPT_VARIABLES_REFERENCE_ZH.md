@@ -249,7 +249,7 @@ trigger_interval: 150 seconds
 
 ### 支持的周期
 
-`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`
+`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `8h`, `12h`, `1d`
 
 ### 输出格式示例
 
@@ -346,11 +346,15 @@ Volatility last 5: 0.60%, 0.90%, 1.20%, 1.50%, 1.85%
 | `{market_regime_5m}` | 所有交易对摘要（5分钟周期） |
 | `{market_regime_15m}` | 所有交易对摘要（15分钟周期） |
 | `{market_regime_1h}` | 所有交易对摘要（1小时周期） |
+| `{market_regime_4h}` | 所有交易对摘要（4小时周期） |
+| `{market_regime_1d}` | 所有交易对摘要（日线周期） |
 | `{BTC_market_regime}` | 仅BTC状态（默认5分钟） |
 | `{BTC_market_regime_1m}` | BTC状态（1分钟） |
 | `{BTC_market_regime_5m}` | BTC状态（5分钟） |
 | `{BTC_market_regime_15m}` | BTC状态（15分钟） |
 | `{BTC_market_regime_1h}` | BTC状态（1小时） |
+| `{BTC_market_regime_4h}` | BTC状态（4小时） |
+| `{BTC_market_regime_1d}` | BTC状态（日线） |
 | `{trigger_market_regime}` | **触发快照**：信号触发时捕获的市场状态。仅在信号触发时可用（定时触发时为N/A）。使用此变量确保AI看到的是触发信号时的市场状态，而非当前实时状态。 |
 
 ETH、SOL和其他支持的交易对也有类似模式。
@@ -521,6 +525,8 @@ BTC news (24h, 46 articles):
 `{SYMBOL_factor_PERIOD_NAME}` — 例如 `{BTC_factor_1h_RSI21}`、`{ETH_factor_5m_MOM10}`
 
 旧语法 `{SYMBOL_factor_NAME}` 仍兼容，并默认按 `5m` 计算，但新模板应显式写出 period。
+
+支持的周期：`1m`, `5m`, `15m`, `1h`, `4h`, `1d`。
 
 ### 输出内容
 

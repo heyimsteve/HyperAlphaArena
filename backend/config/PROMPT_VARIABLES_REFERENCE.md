@@ -249,7 +249,7 @@ Market flow indicators provide insights into order flow, volume delta, and marke
 
 ### Supported Periods
 
-`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`
+`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `8h`, `12h`, `1d`
 
 ### Output Format Examples
 
@@ -346,11 +346,15 @@ Market Regime variables provide AI-ready classification of current market condit
 | `{market_regime_5m}` | All symbols summary (5-minute timeframe) |
 | `{market_regime_15m}` | All symbols summary (15-minute timeframe) |
 | `{market_regime_1h}` | All symbols summary (1-hour timeframe) |
+| `{market_regime_4h}` | All symbols summary (4-hour timeframe) |
+| `{market_regime_1d}` | All symbols summary (1-day timeframe) |
 | `{BTC_market_regime}` | BTC regime only (default 5m) |
 | `{BTC_market_regime_1m}` | BTC regime (1-minute) |
 | `{BTC_market_regime_5m}` | BTC regime (5-minute) |
 | `{BTC_market_regime_15m}` | BTC regime (15-minute) |
 | `{BTC_market_regime_1h}` | BTC regime (1-hour) |
+| `{BTC_market_regime_4h}` | BTC regime (4-hour) |
+| `{BTC_market_regime_1d}` | BTC regime (1-day) |
 | `{trigger_market_regime}` | **Trigger Snapshot**: The market regime captured at signal trigger time. Only available for signal triggers (N/A for scheduled triggers). Use this to ensure AI sees the same regime that caused the trigger, not the current real-time regime. |
 
 Similar patterns available for ETH, SOL, and other supported symbols.
@@ -521,6 +525,8 @@ Factor variables inject real-time factor values and effectiveness metrics into y
 `{SYMBOL_factor_PERIOD_NAME}` — e.g., `{BTC_factor_1h_RSI21}`, `{ETH_factor_5m_MOM10}`
 
 Legacy syntax `{SYMBOL_factor_NAME}` still works and defaults to `5m`, but new templates should always specify the period explicitly.
+
+Supported periods: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`.
 
 ### Output Content
 

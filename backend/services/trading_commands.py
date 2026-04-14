@@ -1415,7 +1415,7 @@ def place_ai_driven_binance_order(
 
             # Get positions
             try:
-                positions = client.get_positions()
+                positions = client.get_positions(include_timing=True)
                 logger.info(f"Account {account.name} has {len(positions)} open positions")
             except Exception as e:
                 logger.error(f"Failed to get Binance positions for {account.name}: {e}")

@@ -112,7 +112,7 @@ PROMPT_CONTEXT_TOOLS = [
                     },
                     "period": {
                         "type": "string",
-                        "enum": ["1m", "5m", "15m", "1h", "4h"],
+                        "enum": ["1m", "5m", "15m", "1h", "4h", "1d"],
                         "description": "Time period for indicators (default: 1h)"
                     },
                     "exchange": {

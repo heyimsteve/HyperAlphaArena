@@ -447,7 +447,7 @@ data.get_flow("BTC", "IMBALANCE", "1h")
 # Usage: > 0.3 = bullish imbalance, < -0.3 = bearish imbalance
 ```
 
-### Periods: "1m", "5m", "15m", "1h", "4h"
+### Periods: "1m", "5m", "15m", "1h", "4h", "1d"
 
 ### Multi-Timeframe Signal Pools
 A single Signal Pool can contain signals with different time windows. When triggered, `data.triggered_signals` may include signals from various timeframes:
@@ -608,7 +608,7 @@ PROGRAM_TOOLS = [
                     },
                     "period": {
                         "type": "string",
-                        "enum": ["1m", "5m", "15m", "1h", "4h"],
+                        "enum": ["1m", "5m", "15m", "1h", "4h", "1d"],
                         "description": "Time period for indicators (default: 1h)"
                     },
                     "exchange": {
@@ -1017,7 +1017,7 @@ MARKET_API_DOCS = """
 Get technical indicator values.
 - symbol: "BTC", "ETH", etc.
 - indicator: "RSI14", "RSI7", "MA5", "MA10", "MA20", "EMA20", "EMA50", "EMA100", "MACD", "BOLL", "ATR14", "VWAP", "STOCH", "OBV"
-- period: "1m", "5m", "15m", "1h", "4h"
+- period: "1m", "5m", "15m", "1h", "4h", "1d"
 - Returns:
   - RSI/MA/EMA/ATR/VWAP/OBV: {"value": 45.2} (float)
   - MACD: {"macd": 123.5, "signal": 98.2, "histogram": 25.3}
@@ -1027,7 +1027,7 @@ Get technical indicator values.
 #### data.get_klines(symbol: str, period: str, count: int = 50) -> list
 Get K-line (candlestick) data.
 - symbol: "BTC", "ETH", etc.
-- period: "1m", "5m", "15m", "1h", "4h"
+- period: "1m", "5m", "15m", "1h", "4h", "1d"
 - count: Number of candles to return (default 50)
 - Returns: List of Kline objects with: timestamp (int seconds), open, high, low, close, volume (all float)
 
@@ -1056,7 +1056,7 @@ Get complete market data (price, volume, open interest, funding rate).
 Get market flow metrics. All metrics include `last_5` for trend analysis.
 - symbol: "BTC", "ETH", etc.
 - metric: "CVD", "OI", "OI_DELTA", "TAKER", "FUNDING", "DEPTH", "IMBALANCE"
-- period: "1m", "5m", "15m", "1h", "4h"
+- period: "1m", "5m", "15m", "1h", "4h", "1d"
 - Returns (with real data examples):
   - "CVD": {"current": 14877256.20, "last_5": [...], "cumulative": 17906808.24, "period": "1h"}
   - "OI": {"current": 16826201.53, "last_5": [...], "period": "1h"}
@@ -1069,7 +1069,7 @@ Get market flow metrics. All metrics include `last_5` for trend analysis.
 #### data.get_regime(symbol: str, period: str) -> RegimeInfo
 Get market regime classification.
 - symbol: "BTC", "ETH", etc.
-- period: "1m", "5m", "15m", "1h", "4h"
+- period: "1m", "5m", "15m", "1h", "4h", "1d"
 - Returns: RegimeInfo object
   - regime.regime: "breakout", "absorption", "stop_hunt", "exhaustion", "trap", "continuation", "noise"
   - regime.conf: 0.85 (confidence 0.0-1.0)
@@ -1080,14 +1080,14 @@ Get market regime classification.
 #### data.get_price_change(symbol: str, period: str) -> dict
 Get price change over period.
 - symbol: "BTC", "ETH", etc.
-- period: "1m", "5m", "15m", "1h", "4h"
+- period: "1m", "5m", "15m", "1h", "4h", "1d"
 - Returns: {"change_percent": 2.5, "change_usd": 2350.0}
 
 #### data.get_factor(symbol: str, factor_name: str, period: str = "5m") -> dict
 Get factor value and effectiveness metrics for a specific K-line period.
 - symbol: "BTC", "ETH", etc.
 - factor_name: "RSI21", "MOM10", "VOL_RATIO", or any custom factor name
-- period: "1m", "5m", "15m", "1h", "4h" (explicit for new code; omitted defaults to 5m for backward compatibility)
+- period: "1m", "5m", "15m", "1h", "4h", "1d" (explicit for new code; omitted defaults to 5m for backward compatibility)
 - Returns: {"factor_name": "RSI21", "symbol": "BTC", "period": "1h", "id": 5, "expression": "RSI(close, 21)", "description": "...", "category": "momentum", "value": 0.0234, "ic": 0.05, "icir": 1.35, "win_rate": 58.2, "decay_half_life_hours": -1}
 - decay_half_life_hours: -1=persistent, positive=half-life hours, None=insufficient data
 - Use `query_factors` tool to see all available factor names

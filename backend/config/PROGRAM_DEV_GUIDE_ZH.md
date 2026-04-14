@@ -653,7 +653,7 @@ price = btc_data.get("price", 0)
 **参数**：
 - `symbol`: 交易对符号（如 "BTC"）
 - `metric`: 指标类型（"CVD", "OI", "OI_DELTA", "TAKER", "FUNDING", "DEPTH", "IMBALANCE"）
-- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h"）
+- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h", "1d"）
 
 **实际返回示例**（CVD）：
 ```python
@@ -747,7 +747,7 @@ if regime.indicators.get("rsi", 50) < 30:
 
 **参数**：
 - `symbol`: 交易对符号（如 "BTC"）
-- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h"）
+- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h", "1d"）
 
 **实际返回示例**：
 ```python
@@ -766,7 +766,7 @@ change = data.get_price_change("BTC", "5m")
 **参数**：
 - `symbol`: 交易对符号（如 "BTC"）
 - `factor_name`: 因子名称（如 "RSI21"、"MOM10" 或自定义因子名）
-- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h"）。为了兼容旧代码，省略时默认按 `5m` 计算。
+- `period`: 时间周期（"1m", "5m", "15m", "1h", "4h", "1d"）。为了兼容旧代码，省略时默认按 `5m` 计算。
 
 **实际返回示例**：
 ```python
