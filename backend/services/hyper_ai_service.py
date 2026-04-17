@@ -53,8 +53,24 @@ from services.ai_stream_service import (
     submit_ai_background_task,
 )
 from services.hyper_ai_llm_providers import get_provider, get_all_providers
-from services.hyper_ai_tools import HYPER_AI_TOOLS, execute_hyper_ai_tool
+from services.hyper_ai_tools import HYPER_AI_TOOLS
 from services.hyper_ai_subagents import execute_subagent_tool
+from services.hyper_ai_harness import (
+    RISK_HIGH,
+    TOOL_STATUS_BLOCKED,
+    TOOL_STATUS_DOMAIN_ERROR,
+    TOOL_STATUS_INFRA_ERROR,
+    TOOL_STATUS_WARNING,
+    SubAgentContractChecker,
+    ToolFailureTracker,
+    assess_tool_risk,
+    blocked_meta,
+    blocked_tool_result,
+    circuit_breaker_result,
+    execute_tool_with_meta,
+    generate_confirmation_id,
+    mask_tool_args,
+)
 from utils.encryption import decrypt_private_key
 
 logger = logging.getLogger(__name__)
@@ -593,10 +609,138 @@ SUBAGENT_TOOL_NAMES = {"call_prompt_ai", "call_program_ai", "call_signal_ai", "c
 # both yield and return, because Python turns ANY function with yield into a generator.
 
 
+def _tool_error_event_data(meta, severity: str = None) -> Dict[str, Any]:
+    return {
+        "name": meta.tool_name,
+        "status": meta.status,
+        "severity": severity or meta.status,
+        "code": meta.code,
+        "message": meta.message,
+        "retryable": meta.retryable,
+    }
+
+
+def _await_tool_confirmation(
+    db: Session,
+    assistant_msg: HyperAiMessage,
+    task_id: Optional[str],
+    fn_name: str,
+    fn_args: Dict[str, Any],
+    risk_assessment,
+) -> Generator[str, None, tuple[bool, str]]:
+    """Pause a high-risk tool call until the user confirms it."""
+    if risk_assessment.risk_level != RISK_HIGH:
+        return True, ""
+
+    if not task_id:
+        return False, blocked_tool_result(
+            "High-risk operation was blocked because the streaming task ID is missing."
+        )
+
+    manager = get_buffer_manager()
+    confirmation_id = generate_confirmation_id()
+    if not manager.begin_confirmation(task_id, confirmation_id):
+        return False, blocked_tool_result(
+            "High-risk operation was blocked because another confirmation is pending or the task is no longer running."
+        )
+
+    assistant_msg.content = "[Waiting for user confirmation...]"
+    db.commit()
+
+    yield format_sse_event("confirmation_required", {
+        "tool_name": fn_name,
+        "args": mask_tool_args(fn_args),
+        "description": risk_assessment.description,
+        "reason": risk_assessment.reason,
+        "confirmation_id": confirmation_id,
+    })
+
+    task = manager.get_task(task_id)
+    if not task:
+        manager.clear_confirmation(task_id, confirmation_id)
+        return False, blocked_tool_result("High-risk operation was blocked because the task is no longer available.")
+
+    try:
+        confirmed = task.confirmation_event.wait(timeout=300)
+        response = task.confirmation_response
+    finally:
+        manager.clear_confirmation(task_id, confirmation_id)
+
+    if not confirmed or not response or not response.get("confirmed"):
+        return False, blocked_tool_result(
+            "User declined this operation. The tool was NOT executed. "
+            "Do NOT retry or re-ask. Simply acknowledge the cancellation and move on."
+        )
+
+    return True, ""
+
+
+def _execute_harnessed_tool_call(
+    db: Session,
+    assistant_msg: HyperAiMessage,
+    task_id: Optional[str],
+    fn_name: str,
+    fn_args: Dict[str, Any],
+    failure_tracker: ToolFailureTracker,
+    llm_config: Dict[str, Any],
+) -> Generator[str, None, str]:
+    """Execute a Hyper AI tool with runtime harness guardrails."""
+    if failure_tracker.is_tripped(fn_name):
+        tool_result = circuit_breaker_result(fn_name)
+        meta = blocked_meta(fn_name, "Tool is temporarily unavailable after repeated infrastructure failures.")
+        yield format_sse_event("tool_error", _tool_error_event_data(meta, severity="circuit_breaker"))
+        return tool_result
+
+    risk_assessment = assess_tool_risk(db, fn_name, fn_args)
+    confirmed, blocked_result = yield from _await_tool_confirmation(
+        db=db,
+        assistant_msg=assistant_msg,
+        task_id=task_id,
+        fn_name=fn_name,
+        fn_args=fn_args,
+        risk_assessment=risk_assessment,
+    )
+    if not confirmed:
+        meta = blocked_meta(fn_name, "User confirmation was not received. The tool was not executed.")
+        yield format_sse_event("tool_error", _tool_error_event_data(meta, severity="user_cancelled"))
+        return blocked_result
+
+    if fn_name in SUBAGENT_TOOL_NAMES:
+        tool_result = yield from execute_subagent_tool(db, fn_name, fn_args, user_id=1)
+        contract_ok, warning = SubAgentContractChecker.check(fn_name, tool_result)
+        if not contract_ok:
+            tool_result = f"{warning}\n{tool_result}"
+            meta = blocked_meta(fn_name, warning)
+            meta.status = TOOL_STATUS_DOMAIN_ERROR
+            meta.code = "contract_fail"
+            yield format_sse_event("tool_error", _tool_error_event_data(meta, severity="contract_fail"))
+        return tool_result
+
+    tool_result, meta = execute_tool_with_meta(
+        db,
+        fn_name,
+        fn_args,
+        user_id=1,
+        api_config=llm_config,
+    )
+    failure_tracker.record(meta)
+
+    if meta.status in (TOOL_STATUS_INFRA_ERROR, TOOL_STATUS_BLOCKED, TOOL_STATUS_WARNING):
+        severity = "infra_error" if meta.status == TOOL_STATUS_INFRA_ERROR else meta.status
+        data = _tool_error_event_data(meta, severity=severity)
+        if meta.status == TOOL_STATUS_INFRA_ERROR:
+            data["failure_count"] = failure_tracker.failure_count(fn_name)
+            data["circuit_breaker_tripped"] = failure_tracker.is_tripped(fn_name)
+        yield format_sse_event("tool_error", data)
+
+    return tool_result
+
+
 def stream_chat_response(
     db: Session,
     conversation_id: int,
-    user_message: str
+    user_message: str,
+    task_id: Optional[str] = None
 ) -> Generator[str, None, None]:
     """
     Stream chat response from LLM with tool calling support.
@@ -662,6 +806,7 @@ def stream_chat_response(
     reasoning_snapshot = ""
     final_content = ""
     iteration = 0
+    failure_tracker = ToolFailureTracker()
 
     try:
         while iteration < MAX_TOOL_ITERATIONS:
@@ -830,10 +975,15 @@ def stream_chat_response(
                             fn_args = {}
 
                         yield format_sse_event("tool_call", {"name": fn_name, "args": fn_args})
-                        if fn_name in SUBAGENT_TOOL_NAMES:
-                            tool_result = yield from execute_subagent_tool(db, fn_name, fn_args, user_id=1)
-                        else:
-                            tool_result = execute_hyper_ai_tool(db, fn_name, fn_args, user_id=1, api_config=llm_config)
+                        tool_result = yield from _execute_harnessed_tool_call(
+                            db=db,
+                            assistant_msg=assistant_msg,
+                            task_id=task_id,
+                            fn_name=fn_name,
+                            fn_args=fn_args,
+                            failure_tracker=failure_tracker,
+                            llm_config=llm_config,
+                        )
 
                         # Emit skill_loaded event so frontend can show skill status
                         if fn_name == "load_skill":
@@ -876,10 +1026,15 @@ def stream_chat_response(
                             fn_args = {}
 
                         yield format_sse_event("tool_call", {"name": fn_name, "args": fn_args})
-                        if fn_name in SUBAGENT_TOOL_NAMES:
-                            tool_result = yield from execute_subagent_tool(db, fn_name, fn_args, user_id=1)
-                        else:
-                            tool_result = execute_hyper_ai_tool(db, fn_name, fn_args, user_id=1, api_config=llm_config)
+                        tool_result = yield from _execute_harnessed_tool_call(
+                            db=db,
+                            assistant_msg=assistant_msg,
+                            task_id=task_id,
+                            fn_name=fn_name,
+                            fn_args=fn_args,
+                            failure_tracker=failure_tracker,
+                            llm_config=llm_config,
+                        )
 
                         # Emit skill_loaded event so frontend can show skill status
                         if fn_name == "load_skill":
@@ -1008,7 +1163,7 @@ def start_chat_task(
         from database.connection import SessionLocal
         task_db = SessionLocal()
         try:
-            yield from stream_chat_response(task_db, conversation_id, user_message)
+            yield from stream_chat_response(task_db, conversation_id, user_message, task_id=task_id)
         finally:
             task_db.close()
 

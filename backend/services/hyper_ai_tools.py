@@ -3374,4 +3374,4 @@ def execute_hyper_ai_tool(
 
     except Exception as e:
         logger.error(f"[execute_hyper_ai_tool] Error executing {tool_name}: {e}")
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e), "_error_class": type(e).__name__})

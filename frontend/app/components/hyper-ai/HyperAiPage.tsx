@@ -64,11 +64,22 @@ interface Conversation {
 }
 
 interface ToolCallEntry {
-  type: 'tool_call' | 'tool_result' | 'reasoning'
+  type: 'tool_call' | 'tool_result' | 'reasoning' | 'subagent_progress' | 'confirmation_required' | 'tool_error'
   name?: string
+  tool?: string
   args?: Record<string, unknown>
   result?: string
   content?: string
+  subagent?: string
+  step?: string
+  round?: number
+  max_rounds?: number
+  taskId?: string
+  confirmationId?: string
+  description?: string
+  status?: 'pending' | 'confirmed' | 'cancelled' | 'failed'
+  message?: string
+  severity?: string
 }
 
 // API format for tool_calls_log from database
@@ -845,6 +856,43 @@ export default function HyperAiPage() {
     }
   }
 
+  const handleToolConfirmation = async (taskId: string, confirmationId: string, confirmed: boolean) => {
+    const nextStatus = confirmed ? 'confirmed' : 'cancelled'
+    setMessages(prev => prev.map(message => ({
+      ...message,
+      toolCalls: message.toolCalls?.map(entry =>
+        entry.type === 'confirmation_required' && entry.confirmationId === confirmationId
+          ? { ...entry, status: nextStatus }
+          : entry
+      )
+    })))
+
+    try {
+      const res = await fetch('/api/hyper-ai/confirm-tool', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          confirmation_id: confirmationId,
+          confirmed,
+        }),
+      })
+      if (!res.ok) {
+        throw new Error(`Confirmation failed: ${res.status}`)
+      }
+    } catch (e) {
+      console.error('Failed to submit tool confirmation:', e)
+      setMessages(prev => prev.map(message => ({
+        ...message,
+        toolCalls: message.toolCalls?.map(entry =>
+          entry.type === 'confirmation_required' && entry.confirmationId === confirmationId
+            ? { ...entry, status: 'failed' }
+            : entry
+        )
+      })))
+    }
+  }
+
   const pollTaskResponse = async (taskId: string, convId: number) => {
     let content = ''
     let reasoning = ''
@@ -944,6 +992,45 @@ export default function HyperAiPage() {
             setMessages(prev => prev.map((m, idx) =>
               idx === prev.length - 1 && m.isStreaming
                 ? { ...m, statusText: `${t('hyperAi.retrying', 'Retrying')} (${attempt}/${maxRetries})...` }
+                : m
+            ))
+          } else if (eventType === 'confirmation_required') {
+            const confirmationEntry: ToolCallEntry = {
+              type: 'confirmation_required',
+              taskId,
+              confirmationId: data.confirmation_id,
+              name: data.tool_name,
+              args: data.args || {},
+              description: data.description || '',
+              status: 'pending',
+            }
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? {
+                    ...m,
+                    statusText: t('hyperAi.confirmationRequired', 'Confirmation required'),
+                    toolCalls: [...(m.toolCalls || []), confirmationEntry],
+                  }
+                : m
+            ))
+            // Force scroll after DOM renders the confirmation card
+            setTimeout(() => {
+              messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+            }, 100)
+          } else if (eventType === 'tool_error') {
+            const errorEntry: ToolCallEntry = {
+              type: 'tool_error',
+              name: data.name,
+              message: data.message || data.code || '',
+              severity: data.severity || data.status,
+            }
+            setMessages(prev => prev.map((m, idx) =>
+              idx === prev.length - 1 && m.isStreaming
+                ? {
+                    ...m,
+                    statusText: data.message || t('hyperAi.toolWarning', 'Tool warning'),
+                    toolCalls: [...(m.toolCalls || []), errorEntry],
+                  }
                 : m
             ))
           } else if (eventType === 'interrupted') {
@@ -1131,6 +1218,7 @@ export default function HyperAiPage() {
                     <MessageBubble
                       message={msg}
                       onContinue={msg.isInterrupted && !sending ? handleContinue : undefined}
+                      onToolConfirmation={handleToolConfirmation}
                       t={t}
                     />
                     {compressionPoint && (
@@ -1461,10 +1549,12 @@ export default function HyperAiPage() {
 const MessageBubble = memo(function MessageBubble({
   message,
   onContinue,
+  onToolConfirmation,
   t
 }: {
   message: Message
   onContinue?: () => void
+  onToolConfirmation: (taskId: string, confirmationId: string, confirmed: boolean) => void
   t: (key: string, fallback?: string) => string
 }) {
   const [showReasoning, setShowReasoning] = useState(false)
@@ -1539,7 +1629,7 @@ const MessageBubble = memo(function MessageBubble({
         {/* Real-time tool calls during streaming */}
         {message.isStreaming && message.toolCalls && message.toolCalls.length > 0 && (
           <div className="mb-2 text-xs bg-background/50 rounded p-2 max-h-32 overflow-y-auto">
-            {message.toolCalls.slice(-8).map((entry, idx) => (
+            {message.toolCalls.filter(e => e.type !== 'confirmation_required').slice(-8).map((entry, idx) => (
               <div key={idx} className="mb-1 last:mb-0">
                 {entry.type === 'tool_call' && (
                   <span className="text-blue-500">→ {entry.name}</span>
@@ -1562,10 +1652,52 @@ const MessageBubble = memo(function MessageBubble({
                 {entry.type === 'subagent_progress' && entry.step === 'tool_round' && (
                   <span className="text-orange-400">[{entry.subagent}] {t('hyperAi.subagentRound', 'round')}{entry.round ? ` ${entry.round}${entry.max_rounds ? `/${entry.max_rounds}` : ''}` : ''}</span>
                 )}
+                {entry.type === 'tool_error' && (
+                  <span className="text-amber-500">[{entry.name}] {entry.message || entry.severity}</span>
+                )}
               </div>
             ))}
           </div>
         )}
+
+        {/* Confirmation cards rendered outside the scrollable tool log for visibility */}
+        {message.isStreaming && message.toolCalls?.filter(e => e.type === 'confirmation_required').map((entry, idx) => (
+          <div key={`confirm-${idx}`} className="mb-2 rounded border border-amber-300 bg-amber-50 p-3 text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
+            <div className="mb-1 flex items-center gap-1 text-sm font-medium">
+              <AlertCircle className="h-4 w-4" />
+              {t('hyperAi.confirmationRequired', 'Confirmation required')}
+            </div>
+            <div className="mb-2 text-xs text-muted-foreground">
+              {entry.description || entry.name}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={entry.status !== 'pending' || !entry.taskId || !entry.confirmationId}
+                onClick={() => entry.taskId && entry.confirmationId && onToolConfirmation(entry.taskId, entry.confirmationId, true)}
+              >
+                <CheckCircle2 className="mr-1 h-3 w-3" />
+                {entry.status === 'confirmed' ? t('hyperAi.confirmed', 'Confirmed') : t('common.confirm', 'Confirm')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                disabled={entry.status !== 'pending' || !entry.taskId || !entry.confirmationId}
+                onClick={() => entry.taskId && entry.confirmationId && onToolConfirmation(entry.taskId, entry.confirmationId, false)}
+              >
+                <X className="mr-1 h-3 w-3" />
+                {entry.status === 'cancelled' ? t('hyperAi.cancelled', 'Cancelled') : t('common.cancel', 'Cancel')}
+              </Button>
+              {entry.status === 'failed' && (
+                <span className="self-center text-[11px] text-destructive">
+                  {t('hyperAi.confirmationFailed', 'Confirmation failed')}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
 
         {/* Tool calls log for completed messages - moved above content */}
         {!message.isStreaming && toolCallsLog.length > 0 && (

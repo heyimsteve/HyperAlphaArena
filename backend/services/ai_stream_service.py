@@ -81,6 +81,11 @@ class StreamTask:
     tool_calls_log: List[Dict[str, Any]] = field(default_factory=list)
     final_content: str = ""
 
+    # Runtime checkpoint state for Hyper AI high-risk tool confirmations
+    confirmation_event: threading.Event = field(default_factory=threading.Event)
+    confirmation_response: Optional[Dict[str, Any]] = field(default=None)
+    pending_confirmation_id: Optional[str] = field(default=None)
+
 
 class StreamBufferManager:
     """
@@ -203,6 +208,49 @@ class StreamBufferManager:
                 for key, value in kwargs.items():
                     if hasattr(task, key):
                         setattr(task, key, value)
+
+    def submit_confirmation(self, task_id: str, confirmation_id: str, confirmed: bool) -> bool:
+        """Submit a user response for a pending runtime checkpoint."""
+        with self._tasks_lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status != "running":
+                return False
+            if not task.pending_confirmation_id:
+                return False
+            if task.pending_confirmation_id != confirmation_id:
+                return False
+            task.confirmation_response = {
+                "confirmation_id": confirmation_id,
+                "confirmed": bool(confirmed),
+                "submitted_at": time.time(),
+            }
+            task.confirmation_event.set()
+            return True
+
+    def begin_confirmation(self, task_id: str, confirmation_id: str) -> bool:
+        """Start a pending runtime checkpoint for a task."""
+        with self._tasks_lock:
+            task = self._tasks.get(task_id)
+            if not task or task.status != "running":
+                return False
+            if task.pending_confirmation_id:
+                return False
+            task.confirmation_response = None
+            task.pending_confirmation_id = confirmation_id
+            task.confirmation_event.clear()
+            return True
+
+    def clear_confirmation(self, task_id: str, confirmation_id: Optional[str] = None):
+        """Clear pending runtime checkpoint state."""
+        with self._tasks_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            if confirmation_id and task.pending_confirmation_id != confirmation_id:
+                return
+            task.confirmation_response = None
+            task.pending_confirmation_id = None
+            task.confirmation_event.clear()
 
     def get_pending_task_for_conversation(self, conversation_id: int) -> Optional[StreamTask]:
         """Check if there's a running task for a conversation."""

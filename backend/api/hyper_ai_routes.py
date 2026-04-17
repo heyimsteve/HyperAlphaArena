@@ -36,6 +36,7 @@ from services.hyper_ai_service import (
     start_insight_task,
 )
 from services.hyper_ai_llm_providers import get_all_providers, get_provider
+from services.ai_stream_service import get_buffer_manager
 
 router = APIRouter(prefix="/api/hyper-ai", tags=["Hyper AI"])
 
@@ -68,6 +69,12 @@ class InsightRequest(BaseModel):
     context: Dict[str, Any]
     selected_event: Optional[Dict[str, Any]] = None
     lang: Optional[str] = None
+
+
+class ConfirmationRequest(BaseModel):
+    task_id: str
+    confirmation_id: str
+    confirmed: bool
 
 
 # Endpoints
@@ -360,6 +367,20 @@ def start_chat(request: ChatRequest, db: Session = Depends(get_db)):
         "task_id": task_id,
         "conversation_id": conv.id
     }
+
+
+@router.post("/confirm-tool")
+def confirm_tool(request: ConfirmationRequest):
+    """Submit a runtime checkpoint response for a pending Hyper AI tool call."""
+    manager = get_buffer_manager()
+    accepted = manager.submit_confirmation(
+        request.task_id,
+        request.confirmation_id,
+        request.confirmed,
+    )
+    if not accepted:
+        raise HTTPException(status_code=404, detail="No matching pending confirmation")
+    return {"success": True}
 
 
 @router.post("/insight")
