@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Trash2, Check, X, Code, Play, AlertCircle, CheckCircle2, Copy, Sparkles, BookOpen, LineChart } from 'lucide-react'
+import { Plus, Trash2, Check, X, Code, Play, AlertCircle, CheckCircle2, Copy, Sparkles, BookOpen, LineChart, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { testRunProgram, TestRunResponse, TradingAccount, getAccounts, getProgramDevGuide } from '@/lib/api'
 import { copyToClipboard } from '@/lib/utils'
+import { STRATEGY_RADAR_URL } from '@/lib/strategyRadar'
 import AiProgramChatModal from './AiProgramChatModal'
 import { BindingPreviewRunDialog } from './BindingPreviewRunDialog'
 import { BacktestModal } from './BacktestModal'
@@ -668,9 +669,12 @@ export default function ProgramTrader() {
                   <BookOpen className="h-4 w-4 mr-1" />
                   {t('programTrader.devGuide', 'Dev Guide')}
                 </Button>
-                <span className="text-xs text-muted-foreground">
-                  {t('programTrader.useCaseHint')}
-                </span>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={STRATEGY_RADAR_URL} target="_blank" rel="noopener noreferrer">
+                    {t('programTrader.strategyIdeasLink', 'Need strategy ideas?')}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </Button>
               </div>
               <div className="flex gap-2">
                 {/* New Button - hidden when creating */}
@@ -753,7 +757,14 @@ export default function ProgramTrader() {
 
                 {/* Code Editor */}
                 <div className="flex-1 flex flex-col min-h-0">
-                  <label className="text-xs font-medium mb-1 flex-shrink-0">{t('programTrader.strategyCode')}</label>
+                  <div className="mb-1 flex flex-wrap items-center gap-2 flex-shrink-0">
+                    <label className="text-xs font-medium">{t('programTrader.strategyCode')}</label>
+                    {isCreating && (
+                      <span className="text-xs text-muted-foreground">
+                        {t('programTrader.testTemplateHint', 'Default code is a test template for learning the workflow, not a profit guarantee.')}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex-1 border rounded-md overflow-hidden">
                     <Editor
                       defaultLanguage="python"

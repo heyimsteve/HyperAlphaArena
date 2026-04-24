@@ -255,7 +255,12 @@ def _call_llm_with_config(
 
     Returns full API response dict for reasoning extraction, or None on failure.
     """
-    from services.ai_decision_service import build_chat_completion_endpoints, get_max_tokens
+    from services.ai_decision_service import (
+        build_chat_completion_endpoints,
+        get_max_tokens,
+        is_new_openai_model,
+        is_reasoning_model,
+    )
 
     headers = {
         "Content-Type": "application/json",
@@ -263,20 +268,8 @@ def _call_llm_with_config(
     }
 
     model = config.get("model", "")
-    model_lower = model.lower()
-
-    # Detect reasoning models
-    is_reasoning_model = any(
-        marker in model_lower for marker in [
-            "gpt-5", "o1-preview", "o1-mini", "o1-", "o3-", "o4-",
-            "deepseek-r1", "deepseek-reasoner",
-            "qwq", "qwen-plus-thinking", "qwen-max-thinking",
-            "claude-4", "claude-sonnet-4-5",
-            "gemini-2.5", "gemini-3",
-        ]
-    )
-
-    is_new_model = is_reasoning_model or "gpt-4o" in model_lower
+    reasoning_model = is_reasoning_model(model)
+    is_new_model = is_new_openai_model(model)
 
     payload = {
         "model": model,
@@ -286,7 +279,7 @@ def _call_llm_with_config(
         ],
     }
 
-    if not is_reasoning_model:
+    if not reasoning_model:
         payload["temperature"] = 0.7
 
     max_tokens_value = get_max_tokens(model)
@@ -300,7 +293,7 @@ def _call_llm_with_config(
         logger.error(f"No valid API endpoint for model {model}")
         return None
 
-    request_timeout = 240 if is_reasoning_model else 120
+    request_timeout = 240 if reasoning_model else 120
 
     for endpoint in endpoints:
         try:

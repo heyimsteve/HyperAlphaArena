@@ -96,8 +96,8 @@ def get_max_tokens(model: str) -> int:
     - GPT-4o/4o-mini: 16384 (use 8000 for cost balance)
     - o1/o1-mini: 65536-100000 (use 12000-16000)
     - Claude: 64000 (use 12000 for cost balance)
-    - Deepseek-chat: 8000
-    - Deepseek-reasoner: 64000 (use 16000)
+    - Deepseek V4 Flash: 16000
+    - Deepseek V4 Pro: 32000
     - Qwen: 8000-65536 (use 8000-16000)
 
     Args:
@@ -116,7 +116,13 @@ def get_max_tokens(model: str) -> int:
     if 'gpt-4.1' in model_lower:
         return 16000
 
-    # Reasoning models (need more output tokens)
+    # DeepSeek V4 series (max output 384K, use 32000 for cost balance)
+    if 'deepseek-v4-pro' in model_lower:
+        return 32000
+    if 'deepseek-v4-flash' in model_lower:
+        return 16000
+
+    # Legacy DeepSeek reasoning models (mapped to v4-flash by API)
     if 'deepseek-reasoner' in model_lower:
         return 16000
 
@@ -148,9 +154,13 @@ def get_max_tokens(model: str) -> int:
     if 'minimax' in model_lower:
         return 16000
 
-    # Deepseek-chat
+    # Deepseek V4 series
+    if 'deepseek-v4' in model_lower:
+        return 16000
+
+    # Legacy Deepseek-chat (mapped to v4-flash by API)
     if 'deepseek' in model_lower:
-        return 8000
+        return 16000
 
     # Fallback for unknown models (conservative safe value)
     return 4000
@@ -1522,13 +1532,21 @@ def build_chat_completion_endpoints(base_url: str, model: Optional[str] = None) 
 # reasoning models, new OpenAI models, Anthropic format, etc.
 # ---------------------------------------------------------------------------
 
+# DeepSeek models/aliases that currently use the V4 thinking-mode contract.
+DEEPSEEK_REASONING_CONTENT_MODEL_MARKERS = [
+    "deepseek-v4",
+    "deepseek-reasoner",
+    "deepseek-chat",
+    "deepseek-r1",
+]
+
 # Canonical list of reasoning models that do NOT support temperature
 # and require max_completion_tokens (OpenAI format only).
 REASONING_MODEL_MARKERS = [
     # OpenAI
     "gpt-5", "o1-preview", "o1-mini", "o1-", "o1", "o3-", "o3", "o4-", "o4",
-    # DeepSeek
-    "deepseek-r1", "deepseek-reasoner",
+    # DeepSeek V4 and legacy aliases mapped to V4 behavior
+    *DEEPSEEK_REASONING_CONTENT_MODEL_MARKERS,
     # Qwen
     "qwq", "qwen-plus-thinking", "qwen-max-thinking", "qwen3-thinking", "qwen-turbo-thinking",
     # Claude (extended thinking)
@@ -1548,6 +1566,12 @@ def is_reasoning_model(model: str) -> bool:
     """Check if a model is a reasoning model (no temperature, special params)."""
     model_lower = (model or "").lower()
     return any(marker in model_lower for marker in REASONING_MODEL_MARKERS)
+
+
+def requires_deepseek_reasoning_content(model: str) -> bool:
+    """DeepSeek V4 thinking-mode models require reasoning_content on tool-call messages."""
+    model_lower = (model or "").lower()
+    return any(marker in model_lower for marker in DEEPSEEK_REASONING_CONTENT_MODEL_MARKERS)
 
 
 def is_new_openai_model(model: str) -> bool:
@@ -1672,7 +1696,7 @@ def extract_reasoning(message: dict) -> str:
     """Extract reasoning/thinking content from LLM API response message.
 
     Unified extraction for all providers. Currently supports:
-    - DeepSeek R1/Reasoner, Qwen QwQ, Grok-3-mini: 'reasoning_content' field
+    - DeepSeek V4/R1/Reasoner, Qwen QwQ, Grok-3-mini: 'reasoning_content' field
     - Some Qwen models: 'thinking' field
 
     Note: OpenAI o1/o3/o4 does not expose reasoning via API.
@@ -1684,7 +1708,7 @@ def extract_reasoning(message: dict) -> str:
     Returns:
         Reasoning text or empty string if none found
     """
-    # Strategy 1: reasoning_content (DeepSeek R1, Qwen QwQ, Grok-3-mini)
+    # Strategy 1: reasoning_content (DeepSeek V4/R1, Qwen QwQ, Grok-3-mini)
     rc = message.get("reasoning_content")
     if rc and isinstance(rc, str) and rc.strip():
         return rc
@@ -1862,6 +1886,14 @@ def build_llm_payload(
     # Optional: streaming
     if stream:
         payload["stream"] = True
+
+    # DeepSeek V4 thinking mode requires prior assistant messages to carry the
+    # reasoning_content field when sent back in multi-turn history.
+    if api_format != "anthropic":
+        if requires_deepseek_reasoning_content(model):
+            for msg in payload.get("messages", []):
+                if msg.get("role") == "assistant" and "reasoning_content" not in msg:
+                    msg["reasoning_content"] = ""
 
     return payload
 
@@ -2049,8 +2081,8 @@ def call_ai_for_decision(
     # Use unified payload/headers builders (see build_llm_payload docstring)
     headers = build_llm_headers("openai", account.api_key)
 
-    # Enable streaming for deepseek-reasoner to handle high-load scenarios
-    use_streaming = (account.model == "deepseek-reasoner")
+    # Enable streaming for DeepSeek reasoning models to handle high-load scenarios
+    use_streaming = requires_deepseek_reasoning_content(account.model)
 
     payload = build_llm_payload(
         model=account.model,
@@ -2090,7 +2122,7 @@ def call_ai_for_decision(
                         json=payload,
                         timeout=request_timeout,
                         verify=False,  # Disable SSL verification for custom AI endpoints
-                        stream=use_streaming,  # Enable streaming reception for deepseek-reasoner
+                        stream=use_streaming,  # Enable streaming for DeepSeek V4/Reasoner
                     )
 
                     if response.status_code == 200:
@@ -2164,7 +2196,7 @@ def call_ai_for_decision(
             )
             return None
 
-        # Handle streaming response for deepseek-reasoner
+        # Handle streaming response for DeepSeek V4/Reasoner
         if use_streaming:
             try:
                 full_content = ""
@@ -2253,7 +2285,7 @@ def call_ai_for_decision(
 
                     # Strategy 1: OpenAI/DeepSeek/Qwen/Grok standard format
                     # message.reasoning (OpenAI o1/o3/gpt-5)
-                    # message.reasoning_content (DeepSeek R1, Qwen QwQ, Grok 3-mini)
+                    # message.reasoning_content (DeepSeek V4/R1, Qwen QwQ, Grok 3-mini)
                     try:
                         reasoning_field = msg.get("reasoning")
                         if reasoning_field:

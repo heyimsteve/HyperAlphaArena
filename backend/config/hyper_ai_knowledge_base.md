@@ -147,12 +147,14 @@ Suggested user-facing guidance:
 - Explain Hyper Alpha Arena as the place where those tracked wallet signals are connected and used
 - Prefer product paths and links over internal implementation details
 - Do not mention internal tool names, API names, or tokens in user replies
+- Do not quote raw status enums or raw field names in normal replies; translate them into product language
 
 Important rules:
 - Hyper Insight is the source of truth for tracked wallets
 - Hyper Alpha Arena consumes synced wallets but does not edit them locally
 - New synced wallets do not automatically enter an existing pool
 - Wallet-tracking pools do not support backtest in Phase 5
+- Wallet Tracking and Strategy Radar are different Hyper Insight capabilities and should not be described as the same flow
 
 ### Q: Can Hyper AI tell me which wallets are currently tracked?
 Yes.
@@ -161,6 +163,12 @@ Recommended usage:
 - First confirm `Hyper Alpha Arena -> Signals -> Wallet Tracking` is connected
 - Then read the exact wallet list currently synced into this Hyper Alpha Arena session
 - Then choose one of those wallets for deeper analysis if needed
+
+Status wording:
+- If login is required, say the user needs to log in to Hyper Alpha Arena
+- If sync is not enabled yet, say Wallet Tracking is not connected yet
+- If sync is enabled but there are no wallets, say there are no synced wallets yet
+- Avoid raw backend wording such as `waiting_for_token`
 
 ### Q: Can Hyper AI analyze a tracked wallet for me?
 Yes, if the wallet is already tracked in Hyper Insight and Wallet Tracking sync is connected in Hyper Alpha Arena.
@@ -171,9 +179,33 @@ Important limitation:
 - Hyper AI should treat style conclusions as analysis based on available data, not as guaranteed full-history facts
 
 If analysis is unavailable:
+- First check whether the user is logged in to Hyper Alpha Arena
 - First check `Hyper Alpha Arena -> Signals -> Wallet Tracking` and confirm sync is connected
 - Then confirm the wallet already appears in the synced wallet list
 - If sync is connected and the wallet is already visible in the synced list but analysis still fails, explain that the problem is system-side rather than a tracking issue
+
+### Q: How do I find strategy ideas?
+Strategy Radar is the Hyper Insight area for browsing current strategy ideas before turning one into a Prompt or Program.
+
+Product boundaries:
+- Hyper Insight entry: `https://hyper.akooi.com/strategy-radar`
+- Hyper Alpha Arena linkage: Hyper AI can query it after login, and Prompt / Program pages can link users to open it
+- Strategy Radar is not part of `Signals -> Wallet Tracking`
+- Wallet Tracking is for synced wallets and wallet signals; Strategy Radar is for strategy ideas
+
+Recommended usage:
+- If the user does not know what strategy to build, guide them to open Strategy Radar first
+- If the user asks Hyper AI for current candidates, first check Strategy Radar's supported symbol/period combinations
+- If the requested symbol is unsupported, explain that Strategy Radar does not currently cover it and suggest supported symbols
+- Treat candidates as reference logic, not as performance-ranked or guaranteed-profitable strategies
+- Do not mention internal query tool names when explaining this flow to users
+
+Important rules:
+- Strategy Radar candidates are quality-filtered by validation and recency, not by backtested profit
+- Do not describe Strategy Radar as a realtime scanning engine, a performance leaderboard, or a source of guaranteed profitable strategies
+- Prebuilt Prompt and Program templates are test templates for learning the workflow
+- Users should adapt and test any candidate before live trading
+- If the user is not logged in, tell them to use the top-right `Login` button inside Hyper Alpha Arena first
 
 ### Q: What data does a wallet signal event contain?
 Wallet signals arrive as `wallet_event` inside trigger_context (AI Trader) or input_data (Program Trader).

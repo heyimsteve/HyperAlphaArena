@@ -14,7 +14,14 @@ import time
 from database.connection import SessionLocal
 from database.models import Account, Position, Trade, CryptoPrice, AccountAssetSnapshot, HyperliquidWallet, AccountPromptBinding
 from services.asset_curve_calculator import invalidate_asset_curve_cache
-from services.ai_decision_service import build_chat_completion_endpoints, build_llm_headers, detect_api_format, _extract_text_from_message
+from services.ai_decision_service import (
+    build_chat_completion_endpoints,
+    build_llm_headers,
+    detect_api_format,
+    is_new_openai_model,
+    is_reasoning_model,
+    _extract_text_from_message,
+)
 from schemas.account import StrategyConfig, StrategyConfigUpdate
 from repositories.strategy_repo import get_strategy_by_account, upsert_strategy
 from services.trading_strategy import hyper_strategy_manager
@@ -849,20 +856,9 @@ def test_llm_connection(payload: dict):
         # Test the connection with a simple completion request
         try:
             model_lower = model.lower()
-
-            # Reasoning models that don't support temperature parameter
-            # Note: Include both "o1" and "o1-" to match "o1", "o1-mini", "o1-preview" etc.
-            is_reasoning_model = any(x in model_lower for x in [
-                'gpt-5', 'o1-preview', 'o1-mini', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'o4',
-                'deepseek-r1', 'deepseek-reasoner',
-                'qwq', 'qwen-plus-thinking', 'qwen-max-thinking', 'qwen3-thinking', 'qwen-turbo-thinking',
-                'claude-4', 'claude-sonnet-4-5',
-                'gemini-2.5', 'gemini-3', 'gemini-2.0-flash-thinking',
-                'grok-3-mini'
-            ])
-
+            is_reasoning = is_reasoning_model(model)
             is_o1_series = any(x in model_lower for x in ['o1-preview', 'o1-mini', 'o1-', 'o1'])
-            is_new_model = is_reasoning_model or any(x in model_lower for x in ['gpt-4o'])
+            is_new_model = is_new_openai_model(model)
 
             if api_format == 'anthropic':
                 # Anthropic native format
@@ -896,7 +892,7 @@ def test_llm_connection(payload: dict):
                         ]
                     }
 
-                if not is_reasoning_model:
+                if not is_reasoning:
                     payload_data["temperature"] = 0
 
                 if is_new_model:
@@ -968,7 +964,7 @@ def test_llm_connection(payload: dict):
                             raw_content = message.get("content")
                             content = _extract_text_from_message(raw_content)
 
-                            if not content and is_reasoning_model:
+                            if not content and is_reasoning:
                                 reasoning = _extract_text_from_message(message.get("reasoning"))
                                 if reasoning:
                                     logger.info(f"LLM test successful for model {model} at {ep} (reasoning model)")

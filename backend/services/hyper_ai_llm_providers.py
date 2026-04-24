@@ -8,7 +8,7 @@ Supported providers:
 - OpenAI (GPT-4o, GPT-4-turbo)
 - Anthropic (Claude 3.5 Sonnet, Claude 3 Opus)
 - Google Gemini (Gemini 2.0 Flash, Gemini 1.5 Pro)
-- Deepseek (Deepseek Chat, Deepseek Reasoner)
+- Deepseek (V4 Flash, V4 Pro) — OpenAI & Anthropic format
 - Z.ai/智谱 (GLM-5.1, GLM-5, GLM-5-Turbo)
 - MiniMax Global/CN (M2.7, M2.5)
 - OpenRouter (Multi-provider gateway)
@@ -95,15 +95,20 @@ PRESET_PROVIDERS: Dict[str, LLMProvider] = {
         name="Deepseek",
         base_url="https://api.deepseek.com/v1",
         models=[
-            # V3 series (latest)
-            "deepseek-chat", "deepseek-reasoner",
-            # R1 reasoning model
-            "deepseek-r1",
-            # Coder models
-            "deepseek-coder",
+            "deepseek-v4-flash", "deepseek-v4-pro",
         ],
         api_format="openai",
         description="Cost-effective AI with strong coding and reasoning"
+    ),
+    "deepseek-anthropic": LLMProvider(
+        id="deepseek-anthropic",
+        name="Deepseek (Anthropic)",
+        base_url="https://api.deepseek.com/anthropic",
+        models=[
+            "deepseek-v4-flash", "deepseek-v4-pro",
+        ],
+        api_format="anthropic",
+        description="DeepSeek via Anthropic-compatible API format"
     ),
     "zhipu": LLMProvider(
         id="zhipu",
@@ -153,7 +158,7 @@ PRESET_PROVIDERS: Dict[str, LLMProvider] = {
             "anthropic/claude-sonnet-4", "anthropic/claude-opus-4",
             "openai/gpt-4o", "openai/o1",
             "google/gemini-2.5-pro", "google/gemini-2.0-flash-exp:free",
-            "deepseek/deepseek-r1", "deepseek/deepseek-chat",
+            "deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro",
             "meta-llama/llama-3.3-70b-instruct",
         ],
         api_format="openai",

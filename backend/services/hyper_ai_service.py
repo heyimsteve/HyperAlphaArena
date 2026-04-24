@@ -503,10 +503,15 @@ def build_messages_for_api(
     # Convert to dicts and restore tool calls
     api_format = api_config.get("api_format", "openai")
     history_dicts = [
-        {"role": m.role, "content": m.content, "tool_calls_log": m.tool_calls_log}
+        {
+            "role": m.role,
+            "content": m.content,
+            "tool_calls_log": m.tool_calls_log,
+            "reasoning_snapshot": m.reasoning_snapshot,
+        }
         for m in history_orm
     ]
-    restored_history = restore_tool_calls_to_messages(history_dicts, api_format)
+    restored_history = restore_tool_calls_to_messages(history_dicts, api_format, model=api_config.get("model", ""))
     messages.extend(restored_history)
 
     # Current user message — if /command mode matched, the last message in
@@ -1117,8 +1122,16 @@ def stream_chat_response(
                     HyperAiMessage.conversation_id == conversation_id,
                     HyperAiMessage.id > cp_mid
                 ).order_by(HyperAiMessage.created_at).all()
-                md = [{"role": m.role, "content": m.content, "tool_calls_log": m.tool_calls_log} for m in h_orm]
-                ml = restore_tool_calls_to_messages(md, af)
+                md = [
+                    {
+                        "role": m.role,
+                        "content": m.content,
+                        "tool_calls_log": m.tool_calls_log,
+                        "reasoning_snapshot": m.reasoning_snapshot,
+                    }
+                    for m in h_orm
+                ]
+                ml = restore_tool_calls_to_messages(md, af, model=profile.llm_model or "")
                 if cp and cp.get("summary"):
                     ml.insert(0, {"role": "system", "content": cp["summary"]})
                 done_data["token_usage"] = calculate_token_usage(ml, profile.llm_model)

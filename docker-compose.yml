@@ -41,8 +41,7 @@ services:
       BINANCE_BROKER_ID: "tbyPbcd9"
       # Factor Engine
       FACTOR_ENGINE_ENABLED: "true"
-      # Hyper Insight private analysis integration
-      HYPER_INSIGHT_SERVICE_TOKEN: ${HYPER_INSIGHT_SERVICE_TOKEN:-}
+      # Hyper Insight login-based integration
       HYPER_INSIGHT_API_BASE_URL: ${HYPER_INSIGHT_API_BASE_URL:-https://hyper.akooi.com}
       # Explicitly disable all proxy settings in container
       HTTP_PROXY: ""

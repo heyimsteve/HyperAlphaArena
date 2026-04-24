@@ -1811,8 +1811,16 @@ def generate_signal_with_ai_stream(
         last_message_id = history_messages[-1].id if history_messages else None
 
         # Restore tool_calls into proper LLM message format
-        history_dicts = [{"role": m.role, "content": m.content, "tool_calls_log": m.tool_calls_log} for m in history_messages]
-        restored = restore_tool_calls_to_messages(history_dicts, api_config.get("api_format", "openai"))
+        history_dicts = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "tool_calls_log": m.tool_calls_log,
+                "reasoning_snapshot": m.reasoning_snapshot,
+            }
+            for m in history_messages
+        ]
+        restored = restore_tool_calls_to_messages(history_dicts, api_config.get("api_format", "openai"), model=api_config.get("model", ""))
         messages.extend(restored)
         messages.append({"role": "user", "content": user_message})
 

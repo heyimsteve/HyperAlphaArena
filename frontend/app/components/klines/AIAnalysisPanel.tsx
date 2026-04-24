@@ -266,7 +266,7 @@ export default function AIAnalysisPanel({
       }
 
       // Create AbortController with 10-minute timeout for AI analysis
-      // Reasoning models (like deepseek-reasoner) can be very slow
+      // Reasoning models (like deepseek-v4-pro) can be very slow
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 600000) // 10 minutes
 

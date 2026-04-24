@@ -116,7 +116,7 @@ function App() {
   /**
    * Hash Routing: Updates both React state and browser URL hash.
    * This enables:
-   * - Shareable links (e.g., arena.akooi.com/#prompts)
+   * - Shareable links (e.g., /#prompts)
    * - Browser back/forward navigation
    * - Page refresh returns to same page
    * - Hyper AI can direct users to specific pages via hash

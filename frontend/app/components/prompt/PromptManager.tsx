@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'react-hot-toast'
+import { ExternalLink } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -18,6 +19,7 @@ import {
   PromptBinding,
   TradingAccount,
 } from '@/lib/api'
+import { STRATEGY_RADAR_URL } from '@/lib/strategyRadar'
 import { useAuth } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -449,9 +451,12 @@ export default function PromptManager() {
                   >
                     📖 {t('prompt.variablesGuide', 'Variables Guide')}
                   </Button>
-                  <span className="text-xs text-muted-foreground">
-                    {t('prompt.useCaseHint')}
-                  </span>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={STRATEGY_RADAR_URL} target="_blank" rel="noopener noreferrer">
+                      {t('prompt.strategyIdeasLink', 'Need strategy ideas?')}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </Button>
                 </div>
                 <div className="flex gap-2">
                   <Button
@@ -503,6 +508,9 @@ export default function PromptManager() {
                             {tpl.isSystem === 'true' && (
                               <span className="ml-2 text-xs text-muted-foreground">[{t('prompt.system', 'System')}]</span>
                             )}
+                            {tpl.isSystem === 'true' && (
+                              <span className="ml-2 text-xs text-muted-foreground">[{t('prompt.testTemplate', 'Test template')}]</span>
+                            )}
                           </span>
                           <span className="text-xs text-muted-foreground">{tpl.key}</span>
                         </div>
@@ -532,6 +540,11 @@ export default function PromptManager() {
                   placeholder={t('prompt.descriptionPlaceholder', 'Prompt description')}
                   disabled={!selectedTemplate || saving}
                 />
+                {selectedTemplate?.isSystem === 'true' && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t('prompt.testTemplateHint', 'For learning and workflow testing only. Not a profit guarantee.')}
+                  </p>
+                )}
               </div>
 
               {/* Template Text Area */}

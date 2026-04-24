@@ -951,8 +951,17 @@ async def get_conversation_messages(
         filtered = [m for m in result if m.id > cp_msg_id]
 
         msg_list = restore_tool_calls_to_messages(
-            [{"role": m.role, "content": m.content, "tool_calls_log": m.tool_calls_log} for m in filtered],
-            api_format
+            [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "tool_calls_log": m.tool_calls_log,
+                    "reasoning_snapshot": m.reasoning_snapshot,
+                }
+                for m in filtered
+            ],
+            api_format,
+            model=token_model or ""
         )
         if cp and cp.get("summary"):
             msg_list.insert(0, {"role": "system", "content": cp["summary"]})

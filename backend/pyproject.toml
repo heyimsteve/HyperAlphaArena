@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hyper-alpha-arena-backend"
-version = "0.9.10"
+version = "0.9.12"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.104.0",

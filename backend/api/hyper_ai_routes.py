@@ -322,10 +322,15 @@ def get_messages(
         ).order_by(HyperAiMessage.created_at).all()
 
         msg_dicts = [
-            {"role": m.role, "content": m.content, "tool_calls_log": m.tool_calls_log}
+            {
+                "role": m.role,
+                "content": m.content,
+                "tool_calls_log": m.tool_calls_log,
+                "reasoning_snapshot": m.reasoning_snapshot,
+            }
             for m in history_orm
         ]
-        msg_list = restore_tool_calls_to_messages(msg_dicts, api_format)
+        msg_list = restore_tool_calls_to_messages(msg_dicts, api_format, model=profile.llm_model or "")
         if cp and cp.get("summary"):
             msg_list.insert(0, {"role": "system", "content": cp["summary"]})
         token_usage = calculate_token_usage(msg_list, profile.llm_model)
