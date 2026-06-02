@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { CoinIcon } from '@/components/ui/coin-icon';
 import {
   Table,
   TableBody,
@@ -231,6 +232,7 @@ export default function PositionsTable({
                 <Card key={positionId} className="p-3">
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2">
+                      <CoinIcon symbol={position.coin} size={18} />
                       <span className="font-bold">{position.coin}</span>
                       <Badge
                         variant={position.side === 'LONG' ? 'default' : 'destructive'}
@@ -302,7 +304,12 @@ export default function PositionsTable({
 
                 return (
                   <TableRow key={positionId}>
-                    <TableCell className="font-medium">{position.coin}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <CoinIcon symbol={position.coin} size={18} />
+                        <span>{position.coin}</span>
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Badge
                         variant={position.side === 'LONG' ? 'default' : 'destructive'}

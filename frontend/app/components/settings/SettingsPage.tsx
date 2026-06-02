@@ -33,6 +33,7 @@ import type {
 } from '@/lib/api'
 import DataCoverageHeatmap from './DataCoverageHeatmap'
 import ExchangeIcon from '@/components/exchange/ExchangeIcon'
+import { CoinIcon } from '@/components/ui/coin-icon'
 
 interface StorageStats {
   exchange: string
@@ -647,9 +648,10 @@ export default function SettingsPage() {
                             key={symbolName}
                             variant={isSelected ? 'default' : 'outline'}
                             size="sm"
-                            className="h-7 px-2 text-xs"
+                            className="h-7 px-2 text-xs gap-1.5"
                             onClick={() => toggleWatchlistSymbol(symbolName)}
                           >
+                            <CoinIcon symbol={symbolName} size={14} />
                             {symbolName}
                           </Button>
                         )
@@ -706,9 +708,10 @@ export default function SettingsPage() {
                             key={symbolName}
                             variant={isSelected ? 'default' : 'outline'}
                             size="sm"
-                            className="h-7 px-2 text-xs"
+                            className="h-7 px-2 text-xs gap-1.5"
                             onClick={() => toggleBnWatchlistSymbol(symbolName)}
                           >
+                            <CoinIcon symbol={symbolName} size={14} />
                             {symbolName}
                           </Button>
                         )

@@ -999,6 +999,8 @@ def stream_chat_response(
                         tool_calls_log.append({
                             "tool": fn_name,
                             "args": fn_args,
+                            # Tool results are user-visible in the frontend stream/log.
+                            # Do not include internal URLs, auth headers, API keys, or raw upstream errors here.
                             # Keep full result for save/create tools (needed for entity cards)
                             # Truncate others to avoid bloating tool_calls_log
                             "result": tool_result if fn_name in ('save_prompt', 'save_program', 'save_signal_pool', 'create_ai_trader') else (tool_result[:500] if len(tool_result) > 500 else tool_result)
@@ -1050,6 +1052,8 @@ def stream_chat_response(
                         tool_calls_log.append({
                             "tool": fn_name,
                             "args": fn_args,
+                            # Tool results are user-visible in the frontend stream/log.
+                            # Do not include internal URLs, auth headers, API keys, or raw upstream errors here.
                             # Keep full result for save/create tools (needed for entity cards)
                             # Truncate others to avoid bloating tool_calls_log
                             "result": tool_result if fn_name in ('save_prompt', 'save_program', 'save_signal_pool', 'create_ai_trader') else (tool_result[:500] if len(tool_result) > 500 else tool_result)

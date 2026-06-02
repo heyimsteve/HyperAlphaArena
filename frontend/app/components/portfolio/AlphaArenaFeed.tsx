@@ -21,6 +21,7 @@ import {
 import { useArenaData } from '@/contexts/ArenaDataContext'
 import { useTradingMode } from '@/contexts/TradingModeContext'
 import { Button } from '@/components/ui/button'
+import { CoinIcon } from '@/components/ui/coin-icon'
 import {
   Dialog,
   DialogContent,
@@ -74,10 +75,8 @@ function formatPercent(value?: number | null) {
 
 function renderSymbolBadge(symbol?: string, size: 'sm' | 'md' = 'md') {
   if (!symbol) return null
-  const text = symbol.slice(0, 4).toUpperCase()
-  const baseClasses = 'inline-flex items-center justify-center rounded bg-muted text-muted-foreground font-semibold'
-  const sizeClasses = size === 'sm' ? 'h-4 w-4 text-[9px]' : 'h-5 w-5 text-[10px]'
-  return <span className={`${baseClasses} ${sizeClasses}`}>{text}</span>
+  const pixelSize = size === 'sm' ? 16 : 20
+  return <CoinIcon symbol={symbol} size={pixelSize} />
 }
 
 

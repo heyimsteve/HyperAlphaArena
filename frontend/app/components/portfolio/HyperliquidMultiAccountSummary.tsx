@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { CoinIcon } from '@/components/ui/coin-icon'
 import { TrendingUp, AlertTriangle, Eye, Zap } from 'lucide-react'
 import { getHyperliquidBalance, getWalletRateLimit, getTradingStats, getBinanceTradingStats, TradingStats, getBinanceSummary, getBinanceDailyQuota } from '@/lib/hyperliquidApi'
 import { getModelLogo } from './logoAssets'
@@ -538,6 +539,7 @@ export default function HyperliquidMultiAccountSummary({
                           }`}
                         >
                           <div className="flex items-center gap-1">
+                            <CoinIcon symbol={pos.symbol} size={14} />
                             <span className={`font-medium ${isLong ? 'text-green-600' : 'text-red-600'}`}>
                               {pos.symbol} {isLong ? 'L' : 'S'}
                             </span>
